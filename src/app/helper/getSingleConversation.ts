@@ -1,0 +1,73 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import Conversation from '../modules/conversation/conversation.model';
+import Message from '../modules/message/message.model';
+
+type PopulateField = 'participants' | 'project' | 'chatGroup' | 'bondLink';
+
+export const getSingleConversation = async (
+    conversationId: string,
+    currentUserId: string,
+    populateField?: PopulateField // only one field will be passed
+) => {
+    let query = Conversation.findById(conversationId).sort({ updatedAt: -1 });
+
+    // always populate lastMessage
+    query = query.populate({ path: 'lastMessage', model: 'Message' });
+
+    // optional populate based on param
+    const populateOptions: Record<PopulateField, any> = {
+        participants: {
+            path: 'participants',
+            // Sin `email`: misma fuga que la lista de chats, por la via del socket.
+            // Ver la nota en conversation.service.ts (proyeccion de userData).
+            select: 'name profile_image _id',
+        },
+        project: { path: 'project', select: 'name cover_image' },
+        chatGroup: { path: 'chatGroup', select: 'name image' },
+        bondLink: { path: 'bondLink', select: 'name' },
+    };
+
+    if (populateField) {
+        query = query.populate(populateOptions[populateField]);
+    }
+
+    const conversation = await query.exec();
+    if (!conversation) return null;
+
+    // count unseen messages (unificado sobre `seenBy`): un mensaje esta no
+    // leido si no lo envio el usuario y su id no esta en el array `seenBy`.
+    const countUnseenMessage = await Message.countDocuments({
+        conversationId: conversation._id,
+        // Un mensaje BORRADO no cuenta como no leído. El contador global del
+        // navbar (getUnreadMessageCount) sí lo filtra, y sin esta línea los dos
+        // números se contradecían: si alguien borraba un mensaje antes de que lo
+        // leyeras, el navbar decía 0 pero la conversación quedaba en negrita con
+        // badge, apuntando a un mensaje que ya no existe.
+        isDeleted: { $ne: true },
+        msgByUserId: { $ne: currentUserId },
+        seenBy: { $ne: currentUserId },
+    });
+
+    // extract the "other" participant if participants were populated
+    const otherUser: any = conversation.participants?.find(
+        (participant: any) => participant._id.toString() !== currentUserId
+    );
+
+    return {
+        _id: conversation._id,
+        userData:
+            populateField === 'participants' && otherUser
+                ? {
+                      _id: otherUser._id,
+                      name: otherUser.name,
+                      profileImage: otherUser.profile_image,
+                  }
+                : null,
+        unseenMsg: countUnseenMessage,
+        lastMessage: conversation.lastMessage, // always populated
+        type: conversation.type,
+        chatGroup: conversation.chatGroup,
+        project: conversation.project,
+        bondLink: conversation.bondLink,
+    };
+};

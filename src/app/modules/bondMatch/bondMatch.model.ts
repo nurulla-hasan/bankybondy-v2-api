@@ -1,0 +1,38 @@
+import { Schema, model } from 'mongoose';
+import { IBondMatch } from './bondMatch.interface';
+
+const BondMatchSchema = new Schema<IBondMatch>(
+    {
+        sourceBond: {
+            type: Schema.Types.ObjectId,
+            ref: 'BondRequest',
+            required: true,
+            index: true,
+        },
+        bonds: [{ type: Schema.Types.ObjectId, ref: 'BondRequest' }],
+        users: [{ type: Schema.Types.ObjectId, ref: 'NormalUser' }],
+        score: { type: Number, required: true },
+        parts: {
+            sem: { type: Number, default: 0 },
+            rep: { type: Number, default: 0 },
+            prox: { type: Number, default: 0 },
+            fresh: { type: Number, default: 0 },
+        },
+        type: {
+            type: String,
+            enum: ['entry', 'surprise', 'empty'],
+            default: 'entry',
+        },
+        size: { type: Number, required: true },
+        computedAt: { type: Date, default: Date.now },
+    },
+    { timestamps: true }
+);
+
+// Servir "matches de este bond" ordenados por puntaje.
+BondMatchSchema.index({ sourceBond: 1, score: -1 });
+// Invalidación por bond participante (al pausar/borrar/editar cualquier bond).
+BondMatchSchema.index({ bonds: 1 });
+
+const BondMatch = model<IBondMatch>('BondMatch', BondMatchSchema);
+export default BondMatch;
