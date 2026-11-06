@@ -62,8 +62,6 @@ const getConversation = async (
             $or: [
                 { 'userData.name': { $regex: escapeRegex(searchTerm), $options: 'i' } },
                 { 'userData.email': { $regex: escapeRegex(searchTerm), $options: 'i' } },
-                { 'project.title': { $regex: escapeRegex(searchTerm), $options: 'i' } },
-                { 'project.name': { $regex: escapeRegex(searchTerm), $options: 'i' } },
                 { 'chatGroup.name': { $regex: escapeRegex(searchTerm), $options: 'i' } },
                 { 'bondLink.name': { $regex: escapeRegex(searchTerm), $options: 'i' } },
             ],
@@ -77,11 +75,6 @@ const getConversation = async (
                 // B.7 (Tanda 2): excluir del listado las conversaciones que ESTE
                 // usuario oculto (soft-hide). No afecta al otro participante.
                 hiddenBy: { $ne: new Types.ObjectId(profileId) },
-                // PARKEADO (objects apagado): desmontar /project del router NO
-                // alcanzaba. Estas conversaciones seguían apareciendo en la lista
-                // de chats y dejaban entrar al chat del objeto por la puerta de
-                // atrás. Se excluyen acá. Reactivar objects = borrar esta línea.
-                type: { $ne: ENUM_CONVERSATION_TYPE.projectGroup },
             },
         },
         {
@@ -102,20 +95,6 @@ const getConversation = async (
         // acá es donde se corta, para que la lista de chats no sea la puerta
         // que salta el vaciado que `getMessages` ya hace.
         scrubLastMessageStage(),
-        {
-            $lookup: {
-                from: 'projects',
-                localField: 'project',
-                foreignField: '_id',
-                as: 'project',
-            },
-        },
-        {
-            $unwind: {
-                path: '$project',
-                preserveNullAndEmptyArrays: true,
-            },
-        },
         {
             $lookup: {
                 from: 'chatgroups',
@@ -311,11 +290,6 @@ const getConversation = async (
                     profile_image: '$otherUser.profile_image',
                 },
 
-                project: {
-                    _id: 1,
-                    name: 1,
-                    cover_image: 1,
-                },
                 chatGroup: {
                     _id: 1,
                     name: 1,
@@ -386,12 +360,6 @@ const getConversationMediaFiles = async (
     const conversation = await Conversation.findOne({
         participants: profileId,
         _id: conversationId,
-        // PARKEADO (objects apagado): faltaba esta línea. Se cerraron la lista de
-        // chats, los mensajes y el contador de no leídos, pero los ADJUNTOS
-        // seguían accesibles: con el id de una conversación de objeto vieja, un
-        // participante podía listar sus fotos y archivos. Reactivar objects =
-        // borrar esta línea (igual que en las otras tres).
-        type: { $ne: ENUM_CONVERSATION_TYPE.projectGroup },
     });
 
     if (!conversation) {

@@ -7,8 +7,6 @@ export interface IConversation {
     participants: ObjectId[];
     lastMessage: ObjectId;
     type: (typeof ENUM_CONVERSATION_TYPE)[keyof typeof ENUM_CONVERSATION_TYPE];
-    institution: ObjectId | null;
-    project: ObjectId | null;
     bondLink: ObjectId | null;
     chatGroup: ObjectId | null;
     // B.7 (Tanda 2): participantes que ocultaron esta conversacion SOLO para si

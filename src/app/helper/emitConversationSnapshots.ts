@@ -2,7 +2,7 @@ import { Server as IOServer } from 'socket.io';
 import { ENUM_CONVERSATION_TYPE } from '../modules/conversation/conversation.enum';
 import { getSingleConversation } from './getSingleConversation';
 
-type PopulateField = 'participants' | 'project' | 'chatGroup' | 'bondLink';
+type PopulateField = 'participants' | 'chatGroup' | 'bondLink';
 
 // El campo que hay que poblar depende del TIPO de conversación: es el que el
 // cliente usa para dibujar la fila (el par, el grupo, el vínculo). Idéntico a lo
@@ -10,7 +10,6 @@ type PopulateField = 'participants' | 'project' | 'chatGroup' | 'bondLink';
 export const fieldForType = (type?: string): PopulateField => {
     if (type === ENUM_CONVERSATION_TYPE.chatGroup) return 'chatGroup';
     if (type === ENUM_CONVERSATION_TYPE.bondLinkGroup) return 'bondLink';
-    if (type === ENUM_CONVERSATION_TYPE.projectGroup) return 'project';
     return 'participants';
 };
 

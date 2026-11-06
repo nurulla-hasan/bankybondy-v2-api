@@ -20,12 +20,7 @@ declare namespace Express {
             topic_image?: File[];
             audio?: File[];
             audio_cover?: File[];
-            project_cover?: File[];
             playlist_cover?: File[];
-            project_ducument?: File[];
-            project_image?: File[];
-            institution_cover?: File[];
-            comment_image?: File[];
             group_chat_image?: File[];
             profile_cover?: File[];
             conversation_image?: File[];

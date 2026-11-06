@@ -20,16 +20,6 @@ const conversationSchema = new Schema<IConversation>(
             default: ENUM_CONVERSATION_TYPE.oneToOne,
             required: true,
         },
-        institution: {
-            type: Schema.Types.ObjectId,
-            ref: 'Institution',
-            default: null,
-        },
-        project: {
-            type: Schema.Types.ObjectId,
-            ref: 'Project',
-            default: null,
-        },
         bondLink: {
             type: Schema.Types.ObjectId,
             ref: 'BondLink',

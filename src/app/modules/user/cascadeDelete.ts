@@ -35,8 +35,6 @@ export const cascadeDeleteUserData = async (
         ['donates', { user: pid }],
         ['playlists', { user: pid }],
         ['transactions', { user: pid }],
-        ['comments', { commentor: pid }],
-        ['conversationcomments', { commentor: pid }],
         // Feedback que la persona dejó en audios AJENOS. Faltaban las dos: el
         // texto y los feeling tags seguían publicados en
         // `GET /audio/:audioId/feedback` después de que borrara su cuenta (con
@@ -44,11 +42,6 @@ export const cascadeDeleteUserData = async (
         // `audioratings` usa `user`; `audiocomments` usa `commentor`.
         ['audioratings', { user: pid }],
         ['audiocomments', { commentor: pid }],
-        ['projectdocuments', { addedBy: pid }],
-        ['projectimages', { addedBy: pid }],
-        ['projectjoinrequests', { user: pid }],
-        ['projectmembers', { user: pid }],
-        ['institutionmembers', { user: pid }],
         ['messages', { msgByUserId: pid }],
         ['bondratings', { $or: [{ rated: pid }, { ratedBy: pid }] }],
         ['friendrequests', { $or: [{ sender: pid }, { receiver: pid }] }],

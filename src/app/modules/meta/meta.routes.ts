@@ -21,14 +21,6 @@ router.get(
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),
     MetaController.donorGrowthChartData
 );
-// PARKED (instituciones apagadas: inaccesibles para TODOS, incluido admin). La
-// métrica de instituciones se desmonta mientras el módulo esté apagado. El
-// controller/servicio quedan intactos; reactivar = descomentar ("solo cablear").
-// router.get(
-//     '/institution-chart-data',
-//     auth(USER_ROLE.superAdmin, USER_ROLE.admin),
-//     MetaController.getInstitutionChartData
-// );
 router.get(
     '/audio-pie-chart',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),

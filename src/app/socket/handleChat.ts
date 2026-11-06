@@ -6,9 +6,6 @@ import { BondLink } from '../modules/bondLink/bondLink.model';
 import ChatGroup from '../modules/chatGroup/chatGroup.model';
 import Conversation from '../modules/conversation/conversation.model';
 import Message from '../modules/message/message.model';
-// PARKED (proyectos apagados): solo lo usaba la rama `projectId` del socket, ahora
-// neutralizada. Reactivar objetos = descomentar esto y el cuerpo de esa rama.
-// import Project from '../modules/project/project.model';
 import { getBlockedIdsFor } from '../modules/userBlock/userBlock.service';
 import { isMessageSafe, type SafetyResult } from '../helper/isTextSafe';
 import { partitionAttachmentUrls } from '../helper/attachmentUrl';
@@ -68,21 +65,20 @@ const handleChat = async (
       try {
         if (
             !data.receiver &&
-            !data.projectId &&
             !data.groupId &&
             !data.bondLinkId
         ) {
             emitError(socket, {
                 code: 400,
-                message: 'Receiver or project id required',
+                message: 'Receiver, group id or bond link id required',
                 type: 'general',
                 details:
-                    'You must provide either a receiverId (for one-to-one) or a projectId (for group chat) or a groupId (for chat group) or a bondLinkId (for bond link chat)',
+                    'You must provide either a receiverId (for one-to-one) or a groupId (for chat group) or a bondLinkId (for bond link chat)',
             });
             return;
         }
 
-        // Texto NORMALIZADO para las CUATRO ramas. Un valor no-string (null, un
+        // Texto NORMALIZADO para las TRES ramas. Un valor no-string (null, un
         // número, un objeto) se guardaba igual, y el filtro fijo de `getMessages`
         // (`text: {$regex: ''}`) nunca lo matcheaba → el mensaje desaparecía del
         // historial para siempre, sin dar ningún error.
@@ -90,8 +86,8 @@ const handleChat = async (
 
         // Moderacion de mensajes (censura gratis): lista dura + capa gratis de
         // OpenAI (omni-moderation-latest). Bloquea al enviar; si OpenAI falla,
-        // fail-open (no rompe el chat). Cubre las 4 ramas porque va antes de
-        // ramificar por receiver/projectId/groupId/bondLinkId. El veredicto se
+        // fail-open (no rompe el chat). Cubre las 3 ramas porque va antes de
+        // ramificar por receiver/groupId/bondLinkId. El veredicto se
         // guarda: la rama 1-a-1 lo reusa en el núcleo y así no se paga dos veces.
         let moderation: SafetyResult | undefined;
         if (msgText.trim()) {
@@ -140,138 +136,6 @@ const handleChat = async (
             if (result.error) {
                 emitError(socket, result.error);
             }
-        } else if (data?.projectId) {
-            // Proyectos/objetos APAGADOS (invariante del proyecto: nada de eso debe
-            // funcionar de ninguna manera por ahora). Aunque las rutas /project
-            // están desmontadas, esta rama del socket seguía aceptando `projectId`
-            // y creaba/emitía mensajes en conversaciones de proyecto. Se rechaza.
-            // Reactivar objetos = quitar este guard ("solo cablear").
-            emitError(socket, {
-                code: 403,
-                message: 'Feature not available',
-                type: 'general',
-                details: 'Project chat is disabled',
-            });
-            return;
-            /* PARKED (proyectos apagados): cuerpo original PRESERVADO para
-               reactivar cuando se enciendan objetos ("solo cablear" = borrar el
-               guard de arriba y este comentario). No se ejecuta.
-            const projectId = data?.projectId;
-            if (projectId && Types.ObjectId.isValid(projectId)) {
-                console.log('Valid ObjectId');
-            } else {
-                console.error('Invalid ObjectId');
-                emitError(socket, {
-                    code: 400,
-                    message: 'Invalid ObjectId',
-                    type: 'general',
-                    details: 'You must provide valid object id',
-                });
-                return;
-            }
-
-            const [project, chat] = await Promise.all([
-                Project.findById(data?.projectId)
-                    .select('_id')
-                    .lean(),
-                Conversation.findOne({ project: projectId })
-                    .select('_id participants')
-                    .lean(),
-            ]);
-
-            if (!chat) {
-                emitError(socket, {
-                    code: 404,
-                    message: 'Chat not found',
-                    type: 'general',
-                    details: 'The group chat was not found',
-                });
-                return;
-            }
-            if (!project) {
-                emitError(socket, {
-                    code: 400,
-                    message: 'Project not found',
-                    type: 'general',
-                    details: 'Project not found',
-                });
-                return;
-            }
-
-            // Solo un participante del chat puede enviar mensajes (anti-IDOR).
-            if (!isParticipant(chat.participants, currentUserId)) {
-                emitError(socket, {
-                    code: 403,
-                    message: 'Forbidden',
-                    type: 'general',
-                    details: 'You are not a participant of this chat',
-                });
-                return;
-            }
-
-            // create new message
-            const messageData = {
-                text: msgText,
-                // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
-                // el socket; sin este filtro podía inyectar cualquier link).
-                imageUrl: attachments.kept.imageUrl,
-                videoUrl: attachments.kept.videoUrl,
-                pdfUrl: attachments.kept.pdfUrl,
-                msgByUserId: currentUserId,
-                conversationId: chat?._id,
-            };
-            const saveMessage = await Message.create(messageData);
-            notifyDroppedAttachments(socket, attachments, {
-                conversationId: messageData.conversationId,
-                messageId: saveMessage._id,
-                clientId: data?.clientId,
-            });
-            const populatedMessage = await saveMessage.populate({
-                path: 'msgByUserId',
-                select: 'name profile_image',
-            });
-            await Conversation.updateOne(
-                { _id: chat?._id },
-                {
-                    lastMessage: populatedMessage._id,
-                }
-            );
-
-            // chat.participants.forEach(async (participantId: Types.ObjectId) => {
-            //     io.to(participantId.toString()).emit(
-            //         `message-${projectId}`,
-            //         populatedMessage
-            //     );
-            //     const singleConversation = await getSingleConversation(
-            //         chat._id,
-            //         participantId.toString()
-            //     );
-            //     io.to(participantId.toString()).emit(
-            //         'conversation',
-            //         singleConversation
-            //     );
-            // });
-
-            await Promise.all(
-                chat.participants.map(async (participantId: Types.ObjectId) => {
-                    const uid = participantId.toString();
-                    io.to(uid).emit(`message-${projectId}`, populatedMessage);
-
-                    const singleConversation = await getSingleConversation(
-                        chat._id.toString(),
-                        uid,
-                        'project'
-                    );
-                    io.to(uid).emit('conversation', singleConversation);
-
-                    // Refrescar el contador de no-leidos del participante (fuente
-                    // unica): sube badge + negrita en vivo tambien en grupos.
-                    if (uid !== currentUserId.toString()) {
-                        await emitUnreadCount(io, uid);
-                    }
-                })
-            );
-            */
         } else if (data?.groupId) {
             const groupId = data?.groupId;
             if (groupId && Types.ObjectId.isValid(groupId)) {

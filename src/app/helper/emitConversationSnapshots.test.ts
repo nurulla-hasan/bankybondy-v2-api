@@ -15,21 +15,18 @@ const cases: Case[] = [
         fieldForType(ENUM_CONVERSATION_TYPE.chatGroup) === 'chatGroup'],
     ['vínculo → bondLink',
         fieldForType(ENUM_CONVERSATION_TYPE.bondLinkGroup) === 'bondLink'],
-    ['proyecto → project',
-        fieldForType(ENUM_CONVERSATION_TYPE.projectGroup) === 'project'],
     ['tipo desconocido → participants (falla hacia el caso más común)',
         fieldForType('lo-que-sea') === 'participants'],
     ['tipo ausente → participants (nunca undefined: el populate lo exige)',
         fieldForType() === 'participants'],
-    ['los cuatro valores del enum son distintos entre sí',
+    ['los tres valores del enum son distintos entre sí',
         new Set(
             [
                 ENUM_CONVERSATION_TYPE.oneToOne,
                 ENUM_CONVERSATION_TYPE.chatGroup,
                 ENUM_CONVERSATION_TYPE.bondLinkGroup,
-                ENUM_CONVERSATION_TYPE.projectGroup,
             ].map(fieldForType)
-        ).size === 4],
+        ).size === 3],
 ];
 
 export const runEmitConversationSnapshotsTests = (): { pass: number; fail: number } => {

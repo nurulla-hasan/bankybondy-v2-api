@@ -43,10 +43,6 @@ const getMessages = async (
         const belongs = await Conversation.findOne({
             _id: conversationObjectId,
             participants: toObjectId(profileId, 'profile id'),
-            // PARKEADO (objects apagado): validar solo la membresía dejaba que un
-            // participante leyera el chat de un objeto pasando su conversationId
-            // directo. Reactivar objects = borrar esta línea.
-            type: { $ne: ENUM_CONVERSATION_TYPE.projectGroup },
         }).select('_id');
         if (!belongs) {
             throw new AppError(httpStatus.NOT_FOUND, 'Conversation not found');
@@ -75,28 +71,6 @@ const getMessages = async (
             return { meta: { page, limit, total: 0, totalPages: 0 }, result: [] };
         }
         conversationId = conversation._id.toString();
-    } else if (query.projectId) {
-        // PARKEADO (objects apagado): esta rama resolvía el chat de un objeto a
-        // partir de su projectId. Con /project desmontado seguía siendo la puerta
-        // más directa para leer esos mensajes. Reactivar objects = borrar el
-        // throw y descomentar el bloque de abajo ("solo cablear").
-        throw new AppError(
-            httpStatus.FORBIDDEN,
-            'Los objetos están deshabilitados.'
-        );
-        // const conversation = await Conversation.findOne({
-        //     project: new mongoose.Types.ObjectId(query.projectId as string),
-        //     participants: {
-        //         $in: [new mongoose.Types.ObjectId(profileId)],
-        //     },
-        // });
-        // if (!conversation) {
-        //     throw new AppError(
-        //         httpStatus.NOT_FOUND,
-        //         'Conversation not found for the project'
-        //     );
-        // }
-        // conversationId = conversation._id.toString();
     } else if (query.chatGroupId) {
         const conversation = await Conversation.findOne({
             chatGroup: toObjectId(query.chatGroupId, 'chat group id'),
@@ -203,10 +177,6 @@ const getUnreadMessageCount = async (profileId: string) => {
     const conversations = await Conversation.find({
         participants: uid,
         hiddenBy: { $ne: uid },
-        // PARKEADO (objects apagado): mismo criterio que la lista de chats. Sin
-        // esto el badge cuenta mensajes de chats de objetos que ya no se pueden
-        // abrir -> reaparece el "badge fantasma" descrito arriba.
-        type: { $ne: ENUM_CONVERSATION_TYPE.projectGroup },
     })
         .select('_id type participants')
         .lean();

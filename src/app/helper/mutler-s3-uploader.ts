@@ -37,14 +37,9 @@ export const uploadFile = () => {
             'chat_images',
             'chat_videos',
             'product_image',
-            'project_cover',
             'banner',
             'playlist_cover',
             'topic_image',
-            'project_ducument',
-            'project_image',
-            'institution_cover',
-            'comment_image',
             'profile_cover',
             'group_chat_image',
             'conversation_image',
@@ -129,16 +124,6 @@ export const uploadFile = () => {
                 uploadPath = 'uploads/images/thumbnail';
             } else if (file.fieldname === 'topic_image') {
                 uploadPath = 'uploads/images/audio_topic';
-            } else if (file.fieldname === 'project_cover') {
-                uploadPath = 'uploads/images/project_cover';
-            } else if (file.fieldname === 'project_ducument') {
-                uploadPath = 'uploads/documents/project_ducument';
-            } else if (file.fieldname === 'institution_cover') {
-                uploadPath = 'uploads/images/institution_cover';
-            } else if (file.fieldname === 'project_image') {
-                uploadPath = 'uploads/images/project_image';
-            } else if (file.fieldname === 'comment_image') {
-                uploadPath = 'uploads/images/comment_image';
             } else if (file.fieldname === 'profile_cover') {
                 uploadPath = 'uploads/images/profile_cover';
             } else if (file.fieldname === 'group_chat_image') {
@@ -203,11 +188,6 @@ export const uploadFile = () => {
         { name: 'topic_icon', maxCount: 1 },
         { name: 'topic_image', maxCount: 1 },
         { name: 'playlist_cover', maxCount: 1 },
-        { name: 'project_cover', maxCount: 1 },
-        { name: 'project_ducument', maxCount: 1 },
-        { name: 'project_image', maxCount: 1 },
-        { name: 'institution_cover', maxCount: 1 },
-        { name: 'comment_image', maxCount: 1 },
         { name: 'profile_cover', maxCount: 1 },
         { name: 'group_chat_image', maxCount: 1 },
         { name: 'conversation_pdf', maxCount: 2 },

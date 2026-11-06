@@ -3,7 +3,7 @@ import Conversation from '../modules/conversation/conversation.model';
 import Message from '../modules/message/message.model';
 import { scrubPreview, toPlainPreview } from './scrubDeletedPreview';
 
-type PopulateField = 'participants' | 'project' | 'chatGroup' | 'bondLink';
+type PopulateField = 'participants' | 'chatGroup' | 'bondLink';
 
 export const getSingleConversation = async (
     conversationId: string,
@@ -23,7 +23,6 @@ export const getSingleConversation = async (
             // Ver la nota en conversation.service.ts (proyeccion de userData).
             select: 'name profile_image _id',
         },
-        project: { path: 'project', select: 'name cover_image' },
         chatGroup: { path: 'chatGroup', select: 'name image' },
         bondLink: { path: 'bondLink', select: 'name' },
     };
@@ -70,7 +69,6 @@ export const getSingleConversation = async (
         lastMessage: scrubPreview(toPlainPreview(conversation.lastMessage)),
         type: conversation.type,
         chatGroup: conversation.chatGroup,
-        project: conversation.project,
         bondLink: conversation.bondLink,
     };
 };

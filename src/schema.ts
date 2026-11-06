@@ -227,81 +227,6 @@
 //   updatedAt Date
 // }
 
-// Table Project {
-
-//   id ObjectId
-
-//   name string
-
-//   description string
-
-//   cover_image string
-
-//   isPublic boolean
-
-//   joinControll enum("Public","Private")
-
-//   ower ObjectId [ref:> normalusers.id]
-
-//   status enum("Ongoing","Canceled","Completed")
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table ProjectMumber {
-
-//   id ObjectId [pk]
-
-//   user ObjectId [ref:> normalusers.id]
-
-//   project ObjectId [ref:> normalusers.id]
-
-//   type enum('Producer','Consumer')
-
-//   role string
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table ProjectJoinRequest {
-
-//   id ObjectId [pk]
-
-//   user ObjectId [ref:> normalusers.id]
-
-//   project ObjectId [ref:> normalusers.id]
-
-//   status  enum("pending",'rejected','accepted')
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table ProjectDocument {
-
-//   id ObjectId [pk]
-
-//   addedBy ObjectId [ref:> normalusers.id]
-
-//   project ObjectId [ref:> Project.id]
-
-//   document_url string
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table ProjectImage {
-
-//   id ObjectId [pk]
-
-//   addedBy ObjectId [ref:> normalusers.id]
-
-//   project ObjectId [ref:> Project.id]
-
-//   image_url string
-//   createdAt Date
-//   updatedAt Date
-// }
-
 //  Table Bond {
 
 //   id ObjectId [pk]
@@ -370,47 +295,6 @@
 //   updatedAt Date
 // }
 
-// Table Institution {
-
-//   id ObjectId [pk ]
-//   name string
-//   description string
-//   groupOneName string
-//   groupTwoName string
-//   facebookLink string
-//   instagramLink string
-//   creator ObjectId [ref:> normalusers.id]
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table InstitutionMumber {
-//   id ObjectId [pk]
-//   group enum('a','b')
-//   user OjbectId [ref:> normalusers.id]
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table InstitutionConversation {
-//   id OjbectId [pk]
-//   name string
-//   isPublic boolean
-//   ussers OjbectId[] [ref:> normalusers.id]
-//   likers OjbectId[] [ref:> normalusers.id]
-//   createdAt Date
-//   updatedAt Date
-// }
-
-// Table ConversationComment {
-//   id ObjectId [pk]
-//   institutionConversation OjbectId [ref:> InstitutionConversation.id]
-//   comment string
-//   likers OjbectId[] [ref:> normalusers.id]
-//   createdAt Date
-//   updated Date
-// }
-
 // Table Transaction {
 //   id ObjectId [pk]
 //   user ObjectId [ref:> normalusers.id]
@@ -426,8 +310,6 @@
 //   participants ObjectId[] [ref:> normalusers.id]
 //   lastMessage ObjectId [ref:> Message.id]
 //   type enum("one-to-one","group")
-//   institution ObjectId [ref: > Institution.id] // nullable
-//   project OjbectId [ref:> Project.id] // nullable
 //   chatGroup OjbectId [ref:> ChatGroup.id] // nullable
 //   createdAt Date
 //   updatedAt Date
