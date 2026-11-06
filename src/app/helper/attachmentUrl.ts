@@ -53,3 +53,47 @@ export const filterCdnAttachmentUrls = (
     const list = Array.isArray(value) ? value : value == null ? [] : [value];
     return list.filter((v): v is string => isCdnAttachmentUrl(v, host));
 };
+
+export const ATTACHMENT_FIELDS = ['imageUrl', 'videoUrl', 'pdfUrl'] as const;
+export type AttachmentField = (typeof ATTACHMENT_FIELDS)[number];
+
+export type AttachmentPartition = {
+    // Lo que se guarda, con las mismas claves que `data` del socket.
+    kept: Record<AttachmentField, string[]>;
+    // Cuántos adjuntos se fueron a la basura, por tipo, para poder decírselo.
+    dropped: Record<AttachmentField, number>;
+    // `CLOUDFRONT_URL` ausente o inválido: se descarta TODO por fail-closed.
+    cdnUnconfigured: boolean;
+    // El cliente mandó adjuntos (válidos o no); sirve para distinguirse de "sin adjuntos".
+    requested: number;
+};
+
+/*
+ * Reparte los adjuntos en "guardable" y "descartado", con conteo.
+ *
+ * Por qué no basta `filterCdnAttachmentUrls`: el filtro tiraba lo que no pasaba
+ * SIN DECIR NADA, y el bubble del cliente quedaba "enviado" con el archivo
+ * perdido para siempre. El contador es la única señal para emitir
+ * `attachment-rejected` y para rechazar por adelantado el mensaje que se queda
+ * sin texto Y sin adjuntos (que antes se guardaba vacío e invisible).
+ */
+export const partitionAttachmentUrls = (
+    data: Record<string, any> | null | undefined,
+    cdnHost?: string | null
+): AttachmentPartition => {
+    const host = cdnHost === undefined ? cdnHostFromEnv() : cdnHost;
+    const kept = {} as Record<AttachmentField, string[]>;
+    const dropped = {} as Record<AttachmentField, number>;
+    let requested = 0;
+
+    for (const field of ATTACHMENT_FIELDS) {
+        const value = data?.[field];
+        const list = Array.isArray(value) ? value : value == null ? [] : [value];
+        requested += list.length;
+        const accepted = list.filter((v): v is string => isCdnAttachmentUrl(v, host));
+        kept[field] = accepted;
+        dropped[field] = list.length - accepted.length;
+    }
+
+    return { kept, dropped, cdnUnconfigured: !host, requested };
+};

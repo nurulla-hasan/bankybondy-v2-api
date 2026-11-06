@@ -17,6 +17,16 @@ router.get(
     messageController.getUnreadCount
 );
 
+// Marcar como leída una conversación por HTTP (gemelo del `seen` del socket).
+router.post(
+    '/mark-seen',
+    auth(USER_ROLE.user),
+    messageController.markSeenMessages
+);
+
+// Enviar un mensaje 1-a-1 por HTTP (gemelo de la rama `receiver` del socket).
+router.post('/send', auth(USER_ROLE.user), messageController.sendMessage);
+
 router.delete(
     '/delete-message/:id',
     auth(USER_ROLE.user),

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import Conversation from '../modules/conversation/conversation.model';
 import Message from '../modules/message/message.model';
+import { scrubPreview, toPlainPreview } from './scrubDeletedPreview';
 
 type PopulateField = 'participants' | 'project' | 'chatGroup' | 'bondLink';
 
@@ -64,7 +65,9 @@ export const getSingleConversation = async (
                   }
                 : null,
         unseenMsg: countUnseenMessage,
-        lastMessage: conversation.lastMessage, // always populated
+        // always populated; puerta del socket para `conversation`: sin vaciar el
+        // borrado, el preview mostraría el texto de un mensaje ya eliminado.
+        lastMessage: scrubPreview(toPlainPreview(conversation.lastMessage)),
         type: conversation.type,
         chatGroup: conversation.chatGroup,
         project: conversation.project,

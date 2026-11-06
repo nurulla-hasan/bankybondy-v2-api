@@ -16,6 +16,14 @@
 import { runMatchingScoreTests } from '../app/modules/bondRequest/matching.scoring.test';
 import { runPublicShapeTests } from '../app/modules/bondRequest/bondRequest.publicShape.test';
 import { runAttachmentUrlTests } from '../app/helper/attachmentUrl.test';
+import { runMessagePipelineTests } from '../app/modules/message/message.pipeline.test';
+import { runScrubDeletedPreviewTests } from '../app/helper/scrubDeletedPreview.test';
+import { runNormalizeMessageTextTests } from '../app/helper/normalizeMessageText.test';
+import { runMarkSeenTests } from '../app/helper/markSeen.test';
+import { runMessageRejectionTests } from '../app/helper/messageRejection.test';
+import { runEmitConversationSnapshotsTests } from '../app/helper/emitConversationSnapshots.test';
+import { runChatGroupRosterTests } from '../app/modules/chatGroup/chatGroup.roster.test';
+import { runMediaPipelineTests } from '../app/modules/conversation/media.pipeline.test';
 import { runPaginationTests } from '../app/utilities/pagination.test';
 import { runObjectIdTests } from '../app/utilities/objectId.test';
 import { runSessionCodesTests } from '../app/utilities/sessionCodes.test';
@@ -30,36 +38,64 @@ import { runTrendingTests } from '../app/modules/audio/audio.trending.test';
 
 /* eslint-disable no-console */
 
-const main = (): void => {
+const main = async (): Promise<void> => {
     let pass = 0;
     let fail = 0;
 
-    const suites: { nombre: string; correr: () => { pass: number; fail: number } }[] =
-        [
-            { nombre: 'matching.scoring', correr: runMatchingScoreTests },
-            {
-                nombre: 'matching.schedule (TTL adaptativo / escala)',
-                correr: runMatchingScheduleTests,
-            },
-            { nombre: 'bondRequest.publicShape', correr: runPublicShapeTests },
-            { nombre: 'attachmentUrl', correr: runAttachmentUrlTests },
-            { nombre: 'pagination', correr: runPaginationTests },
-            { nombre: 'objectId (guarda de autorizacion)', correr: runObjectIdTests },
-            { nombre: 'sessionCodes (deslogueo)', correr: runSessionCodesTests },
-            { nombre: 'QueryBuilder (sort/fields/paginate)', correr: runQueryBuilderTests },
-            { nombre: 'inputValidation', correr: runInputValidationTests },
-            {
-                nombre: 'subscriptionPlans (anti-downgrade / pagos)',
-                correr: runSubscriptionPlanTests,
-            },
-            { nombre: 'audio.moderation', correr: runAudioModerationTests },
-            { nombre: 'moderateImage', correr: runImageModerationTests },
-            { nombre: 'audio.listen', correr: runAudioListenTests },
-            { nombre: 'audio.trending', correr: runTrendingTests },
-        ];
+    const suites: {
+        nombre: string;
+        correr: () => { pass: number; fail: number } | Promise<{ pass: number; fail: number }>;
+    }[] = [
+        { nombre: 'matching.scoring', correr: runMatchingScoreTests },
+        {
+            nombre: 'matching.schedule (TTL adaptativo / escala)',
+            correr: runMatchingScheduleTests,
+        },
+        { nombre: 'bondRequest.publicShape', correr: runPublicShapeTests },
+        { nombre: 'attachmentUrl', correr: runAttachmentUrlTests },
+        {
+            nombre: 'message.pipeline (seen / borrados / paginación)',
+            correr: runMessagePipelineTests,
+        },
+        {
+            nombre: 'scrubDeletedPreview (vista previa de chats)',
+            correr: runScrubDeletedPreviewTests,
+        },
+        {
+            nombre: 'normalizeMessageText (texto siempre string)',
+            correr: runNormalizeMessageTextTests,
+        },
+        { nombre: 'markSeen (guardas y write)', correr: runMarkSeenTests },
+        {
+            nombre: 'messageRejection (los dos rechazos del envio)',
+            correr: runMessageRejectionTests,
+        },
+        {
+            nombre: 'emitConversationSnapshots (tipo → campo poblado)',
+            correr: runEmitConversationSnapshotsTests,
+        },
+        { nombre: 'chatGroup roster (quién es miembro)', correr: runChatGroupRosterTests },
+        {
+            nombre: 'media.pipeline (galería: tipos y referencia)',
+            correr: runMediaPipelineTests,
+        },
+        { nombre: 'pagination', correr: runPaginationTests },
+        { nombre: 'objectId (guarda de autorizacion)', correr: runObjectIdTests },
+        { nombre: 'sessionCodes (deslogueo)', correr: runSessionCodesTests },
+        { nombre: 'QueryBuilder (sort/fields/paginate)', correr: runQueryBuilderTests },
+        { nombre: 'inputValidation', correr: runInputValidationTests },
+        {
+            nombre: 'subscriptionPlans (anti-downgrade / pagos)',
+            correr: runSubscriptionPlanTests,
+        },
+        { nombre: 'audio.moderation', correr: runAudioModerationTests },
+        { nombre: 'moderateImage', correr: runImageModerationTests },
+        { nombre: 'audio.listen', correr: runAudioListenTests },
+        { nombre: 'audio.trending', correr: runTrendingTests },
+    ];
 
     for (const s of suites) {
-        const r = s.correr();
+        const r = await s.correr();
         pass += r.pass;
         fail += r.fail;
         console.log(
@@ -72,4 +108,4 @@ const main = (): void => {
     if (fail > 0) process.exit(1);
 };
 
-main();
+void main();

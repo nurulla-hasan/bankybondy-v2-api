@@ -2,7 +2,11 @@
 /* Pruebas puras del validador de URLs de adjuntos (sin DB ni red).
  * Blindan el socket `send-message`: si vuelve a aceptarse una URL que no es de
  * nuestro CDN como adjunto, estas aserciones fallan y el gate corta. */
-import { isCdnAttachmentUrl, filterCdnAttachmentUrls } from './attachmentUrl';
+import {
+    isCdnAttachmentUrl,
+    filterCdnAttachmentUrls,
+    partitionAttachmentUrls,
+} from './attachmentUrl';
 
 const CDN = 'd123abc.cloudfront.net'; // host del CDN inyectado (test determinista)
 const ok = `https://${CDN}/uploads/images/chat_image/1699999999-foto.jpg`;
@@ -44,6 +48,52 @@ const cases: Case[] = [
         filterCdnAttachmentUrls(undefined, CDN).length === 0],
     ['string suelto válido → [url]',
         JSON.stringify(filterCdnAttachmentUrls(ok, CDN)) === JSON.stringify([ok])],
+
+    // — partitionAttachmentUrls: el descarte tiene que ser contable —
+    ['guarda las válidas y cuenta las malas, por tipo',
+        JSON.stringify(partitionAttachmentUrls({ imageUrl: [ok, evil, okSigned] }, CDN)) ===
+            JSON.stringify({
+                kept: { imageUrl: [ok, okSigned], videoUrl: [], pdfUrl: [] },
+                dropped: { imageUrl: 1, videoUrl: 0, pdfUrl: 0 },
+                cdnUnconfigured: false,
+                requested: 3,
+            })],
+    ['los tres campos a la vez',
+        (() => {
+            const p = partitionAttachmentUrls(
+                { imageUrl: evil, videoUrl: `https://${CDN}/v.mp4`, pdfUrl: [evil, evil] },
+                CDN
+            );
+            return (
+                p.kept.imageUrl.length === 0 &&
+                p.kept.videoUrl.length === 1 &&
+                p.dropped.imageUrl === 1 &&
+                p.dropped.pdfUrl === 2 &&
+                p.requested === 4 &&
+                Object.values(p.kept).every(Array.isArray)
+            );
+        })()],
+    ['string suelto cuenta como uno',
+        partitionAttachmentUrls({ imageUrl: evil }, CDN).dropped.imageUrl === 1],
+    ['sin adjuntos: nada guardado, nada caído, requested 0',
+        (() => {
+            const p = partitionAttachmentUrls({ text: 'hola' }, CDN);
+            return p.requested === 0 &&
+                Object.values(p.dropped).every((n) => n === 0) &&
+                Object.values(p.kept).every((a) => a.length === 0);
+        })()],
+    ['CDN sin configurar: se descarta todo PERO se puede decir por qué',
+        (() => {
+            const p = partitionAttachmentUrls({ imageUrl: [ok] }, null);
+            return p.cdnUnconfigured === true &&
+                p.dropped.imageUrl === 1 &&
+                p.kept.imageUrl.length === 0;
+        })()],
+    ['CDN configurado: cdnUnconfigured false (no se confunde con un link malo)',
+        partitionAttachmentUrls({ imageUrl: [evil] }, CDN).cdnUnconfigured === false],
+    ['payload inexistente no revienta (data puede venir raro)',
+        partitionAttachmentUrls(undefined, CDN).requested === 0 &&
+        partitionAttachmentUrls(null, CDN).requested === 0],
 ];
 
 export const runAttachmentUrlTests = (): { pass: number; fail: number } => {

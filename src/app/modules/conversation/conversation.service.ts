@@ -7,10 +7,16 @@ import httpStatus from 'http-status';
 import AppError from '../../error/appError';
 import calculatePagination from '../../helper/paginationHelper';
 import pick from '../../helper/pick';
+import { scrubLastMessageStage } from '../../helper/scrubDeletedPreview';
 import Message from '../message/message.model';
 import { getBlockedObjectIdsFor } from '../userBlock/userBlock.service';
 import { ENUM_CONVERSATION_TYPE } from './conversation.enum';
 import Conversation from './conversation.model';
+import {
+    buildMediaGalleryPipeline,
+    urlsFromItems,
+    type MediaItem,
+} from './media.pipeline';
 
 const getConversation = async (
     profileId: string,
@@ -92,6 +98,10 @@ const getConversation = async (
                 preserveNullAndEmptyArrays: true,
             },
         },
+        // La vista previa no puede dejar el contenido de un mensaje borrado:
+        // acá es donde se corta, para que la lista de chats no sea la puerta
+        // que salta el vaciado que `getMessages` ya hace.
+        scrubLastMessageStage(),
         {
             $lookup: {
                 from: 'projects',
@@ -395,40 +405,16 @@ const getConversationMediaFiles = async (
     // mensajes BORRADOS (isDeleted) ni de usuarios BLOQUEADOS (el bloqueo alcanza
     // a los grupos). Antes el $match solo filtraba por conversación → leak.
     const blockedObjectIds = await getBlockedObjectIdsFor(profileId);
-    const [result] = await Message.aggregate([
-        {
-            $match: {
-                conversationId: new mongoose.Types.ObjectId(conversationId),
-                isDeleted: { $ne: true },
-                msgByUserId: { $nin: blockedObjectIds },
-            },
-        },
-        {
-            $project: {
-                media: {
-                    $concatArrays: [
-                        { $ifNull: ['$imageUrl', []] },
-                        { $ifNull: ['$videoUrl', []] },
-                        { $ifNull: ['$pdfUrl', []] },
-                    ],
-                },
-            },
-        },
-        { $unwind: '$media' },
-        {
-            $facet: {
-                paginatedResults: [
-                    { $sort: { _id: 1 } }, // optional sort
-                    { $skip: skip },
-                    { $limit: limit },
-                    { $group: { _id: null, media: { $push: '$media' } } },
-                ],
-                totalCount: [{ $count: 'count' }],
-            },
-        },
-    ]);
+    const [result] = await Message.aggregate(
+        buildMediaGalleryPipeline({
+            conversationObjectId: new mongoose.Types.ObjectId(conversationId),
+            blockedObjectIds,
+            skip,
+            limit,
+        })
+    );
 
-    const urls = result.paginatedResults[0]?.media || [];
+    const items: MediaItem[] = result.paginatedResults[0]?.items || [];
     const totalUrls = result.totalCount[0]?.count || 0;
     const totalPages = Math.ceil(totalUrls / limit);
 
@@ -439,7 +425,10 @@ const getConversationMediaFiles = async (
             totalPages: totalPages,
             total: totalUrls,
         },
-        urls,
+        // `urls` queda EXACTAMENTE como estaba (misma lista, mismo orden); la
+        // clave nueva es `items`, con el mensaje y la fecha de cada adjunto.
+        urls: urlsFromItems(items),
+        items,
     };
 };
 

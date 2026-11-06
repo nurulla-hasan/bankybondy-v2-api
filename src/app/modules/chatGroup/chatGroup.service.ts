@@ -5,6 +5,7 @@ import { ENUM_CONVERSATION_TYPE } from '../conversation/conversation.enum';
 import Conversation from '../conversation/conversation.model';
 import NormalUser from '../normalUser/normalUser.model';
 import { findBlockedPairAmong } from '../userBlock/userBlock.service';
+import { esObjectIdUsable } from '../../utilities/objectId';
 import { IChatGroup } from './chatGroup.interface';
 import ChatGroup from './chatGroup.model';
 
@@ -258,10 +259,73 @@ const removeMember = async (
     return result;
 };
 
+// Las mismas tres claves que la lista de chats para los integrantes
+// (conversation.service.ts, el `$map` de `members`). Nada más: `email` tampoco
+// viaja por la lista.
+const ROSTER_SELECT = 'name profile_image _id';
+
+// Los ids de TODOS los del grupo: el creador NO está en `participants` del
+// ChatGroup (desde el dedup de createGroupChat vive solo en `creator`), pero sí
+// en la conversación. Función aparte porque esa regla es la que hace que un
+// creador pueda leer su propio roster o no.
+export const groupMemberIds = (group: any): Set<string> =>
+    new Set(
+        [
+            ...(group.participants ?? []).map((p: any) => p?._id ?? p),
+            group.creator?._id ?? group.creator,
+        ]
+            .filter(Boolean)
+            .map((id: any) => id.toString())
+    );
+
+/**
+ * La lista COMPLETA de miembros de un grupo.
+ *
+ * Hasta ahora el roster solo vivía dentro de `get-chat-list`, con el `limit` de
+ * esa página: con muchos miembros la UI podía mostrarlos cortados en silencio.
+ * Esta lectura no pagina y está abierta solo para miembros.
+ */
+const getGroupMembers = async (profileId: string, groupId: string) => {
+    if (!esObjectIdUsable(groupId)) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'Invalid group id');
+    }
+
+    const group: any = await ChatGroup.findById(groupId)
+        .populate({ path: 'participants', select: ROSTER_SELECT })
+        .populate({ path: 'creator', select: ROSTER_SELECT });
+
+    if (!group) {
+        throw new AppError(httpStatus.NOT_FOUND, 'Group not found');
+    }
+
+    // No-miembro → 404, no 403: un 403 confirmaría que el grupo EXISTE. Además
+    // el grupo ya le es invisible en su lista de chats, así que 404 es coherente.
+    if (!groupMemberIds(group).has(String(profileId))) {
+        throw new AppError(httpStatus.NOT_FOUND, 'Group not found');
+    }
+
+    const rosterOf = (p: any) => ({
+        _id: p?._id,
+        name: p?.name,
+        profile_image: p?.profile_image,
+    });
+
+    return {
+        _id: group._id,
+        name: group.name,
+        image: group.image,
+        creator: rosterOf(group.creator),
+        // Mismo shape que `members` en la lista de chats, escrito acá en vez de
+        // depender de lo que deje pasar el `select` del populate.
+        participants: (group.participants ?? []).map(rosterOf),
+    };
+};
+
 const ChatGroupServices = {
     createGroupChat,
     addMember,
     removeMember,
     updateGroupData,
+    getGroupMembers,
 };
 export default ChatGroupServices;

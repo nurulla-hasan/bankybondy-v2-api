@@ -1,37 +1,27 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Types } from 'mongoose';
-import NormalUser from '../modules/normalUser/normalUser.model';
 import { Server as IOServer, Socket } from 'socket.io';
 import { getSingleConversation } from '../helper/getSingleConversation';
 import { BondLink } from '../modules/bondLink/bondLink.model';
 import ChatGroup from '../modules/chatGroup/chatGroup.model';
-import { ENUM_CONVERSATION_TYPE } from '../modules/conversation/conversation.enum';
 import Conversation from '../modules/conversation/conversation.model';
 import Message from '../modules/message/message.model';
-import MessageService from '../modules/message/message.service';
 // PARKED (proyectos apagados): solo lo usaba la rama `projectId` del socket, ahora
 // neutralizada. Reactivar objetos = descomentar esto y el cuerpo de esa rama.
 // import Project from '../modules/project/project.model';
 import { getBlockedIdsFor } from '../modules/userBlock/userBlock.service';
-import { isMessageSafe } from '../helper/isTextSafe';
-import { filterCdnAttachmentUrls } from '../helper/attachmentUrl';
-import { esObjectIdUsable } from '../utilities/objectId';
+import { isMessageSafe, type SafetyResult } from '../helper/isTextSafe';
+import { partitionAttachmentUrls } from '../helper/attachmentUrl';
+import { notifyDroppedAttachments } from '../helper/attachmentNotice';
+import { normalizeMessageText } from '../helper/normalizeMessageText';
+import { emitUnreadCount } from '../helper/emitUnreadCount';
+import { markSeen } from '../helper/markSeen';
+import { createOneToOneMessage } from '../helper/createOneToOneMessage';
+import {
+    emptyMessageFailure,
+    moderationFailure,
+} from '../helper/messageRejection';
 import { emitError } from './helper';
-
-// Emite al receptor su conteo de mensajes no leidos (B.5). Best-effort: no debe
-// romper el flujo de envio de mensajes si algo falla.
-const emitUnreadCount = async (io: IOServer, receiverId: string) => {
-    try {
-        const { totalUnread, perConversation } =
-            await MessageService.getUnreadMessageCount(receiverId);
-        io.to(receiverId.toString()).emit('message-notification', {
-            totalUnread,
-            perConversation,
-        });
-    } catch {
-        // Silencioso a proposito: la notificacion es secundaria al mensaje.
-    }
-};
 
 // ¿el usuario está entre los participantes del chat? (control anti-IDOR)
 const isParticipant = (participants: any[], userId: string): boolean =>
@@ -92,200 +82,64 @@ const handleChat = async (
             return;
         }
 
+        // Texto NORMALIZADO para las CUATRO ramas. Un valor no-string (null, un
+        // número, un objeto) se guardaba igual, y el filtro fijo de `getMessages`
+        // (`text: {$regex: ''}`) nunca lo matcheaba → el mensaje desaparecía del
+        // historial para siempre, sin dar ningún error.
+        const msgText = normalizeMessageText(data?.text);
+
         // Moderacion de mensajes (censura gratis): lista dura + capa gratis de
         // OpenAI (omni-moderation-latest). Bloquea al enviar; si OpenAI falla,
         // fail-open (no rompe el chat). Cubre las 4 ramas porque va antes de
-        // ramificar por receiver/projectId/groupId/bondLinkId.
-        const msgText = (data?.text || '').toString();
+        // ramificar por receiver/projectId/groupId/bondLinkId. El veredicto se
+        // guarda: la rama 1-a-1 lo reusa en el núcleo y así no se paga dos veces.
+        let moderation: SafetyResult | undefined;
         if (msgText.trim()) {
-            const verdict = await isMessageSafe(msgText);
-            if (!verdict.safe) {
-                emitError(socket, {
-                    code: 422,
-                    message:
-                        verdict.reason ||
-                        'Este mensaje no cumple las normas de la plataforma.',
-                    type: 'general',
-                    // Objeto (no string) para que el front ubique y borre la
-                    // burbuja optimista EXACTA por su clientId (o por texto si el
-                    // front es viejo y no lo mandó), sin refrescar.
-                    details: {
-                        kind: 'message_blocked',
-                        text: msgText,
-                        clientId: data?.clientId,
-                    },
-                });
+            moderation = await isMessageSafe(msgText);
+            const rejected = moderationFailure(
+                msgText,
+                moderation,
+                data?.clientId
+            );
+            if (rejected) {
+                emitError(socket, rejected);
                 return;
             }
         }
 
+        // Adjuntos: se reparten UNA vez, antes de ramificar, para poder avisar los
+        // descartados y no guardar un mensaje sin contenido.
+        const attachments = partitionAttachmentUrls(data);
+        const sinContenido = emptyMessageFailure(
+            msgText,
+            attachments,
+            data?.clientId
+        );
+        if (sinContenido) {
+            emitError(socket, sinContenido);
+            return;
+        }
+
         if (data?.receiver) {
-            const receiverId = data.receiver.toString();
-
-            // Receptor VÁLIDO, DISTINTO de mí y EXISTENTE. Sin esto había dos
-            // problemas serios:
-            //  1) Si `receiver` era mi propio id, la búsqueda de abajo
-            //     (participants:yo AND participants:yo) matcheaba CUALQUIER
-            //     conversación 1-a-1 mía: el mensaje podía terminar en una charla
-            //     con otra persona pero emitirse a mi propio canal → historial
-            //     corrupto y mensajes fantasma.
-            //  2) Un ObjectId válido pero inexistente creaba una conversación
-            //     huérfana (con un "usuario" que no existe).
-            if (
-                !Types.ObjectId.isValid(receiverId) ||
-                receiverId === currentUserId.toString()
-            ) {
-                emitError(socket, {
-                    code: 400,
-                    message: 'Invalid receiver',
-                    type: 'general',
-                    details: 'You must provide a valid, different receiver',
-                });
-                return;
-            }
-            const receiverExists = await NormalUser.exists({ _id: receiverId });
-            if (!receiverExists) {
-                emitError(socket, {
-                    code: 404,
-                    message: 'Receiver not found',
-                    type: 'general',
-                    details: 'The receiver user does not exist',
-                });
-                return;
-            }
-
-            // Bloqueo (B.4): si emisor y receptor estan bloqueados entre si (en
-            // cualquier sentido), NO se crea ni emite el mensaje. Solo aplica a
-            // la rama 1-a-1; grupos/proyectos/bondLink no se ven afectados.
-            const blockedIds = await getBlockedIdsFor(currentUserId);
-            if (blockedIds.includes(receiverId)) {
-                emitError(socket, {
-                    code: 403,
-                    message: 'You cannot message this user',
-                    type: 'general',
-                    details:
-                        'Messaging is not allowed between blocked users',
-                });
-                return;
-            }
-
-            // La conversación 1-a-1 se identifica por sus DOS participantes EXACTOS
-            // ($all + tamaño 2). Antes con dos condiciones `participants:X` sueltas
-            // un id repetido (self-message) matcheaba cualquier chat mío; el guard
-            // de arriba ya lo evita, y esto lo blinda de raíz.
-            let conversation = await Conversation.findOne({
-                participants: { $all: [currentUserId, data.receiver], $size: 2 },
-                type: ENUM_CONVERSATION_TYPE.oneToOne,
-            });
-            if (!conversation) {
-                conversation = await Conversation.create({
-                    participants: [currentUserId, data.receiver],
-                    type: ENUM_CONVERSATION_TYPE.oneToOne,
-                });
-            }
-
-            const messageData = {
-                text: data.text || '',
-                // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
-                // el socket; sin este filtro podía inyectar cualquier link).
-                imageUrl: filterCdnAttachmentUrls(data.imageUrl),
-                videoUrl: filterCdnAttachmentUrls(data.videoUrl),
-                pdfUrl: filterCdnAttachmentUrls(data.pdfUrl),
-                msgByUserId: currentUserId,
-                conversationId: conversation?._id,
-            };
-            const saveMessage = await Message.create(messageData);
-            const populatedMessage = await saveMessage.populate({
-                path: 'msgByUserId',
-                select: 'name profile_image',
-            });
-            // DES-OCULTAR a los dos (A16). El listado de chats excluye toda
-            // conversación con tu id en `hiddenBy` (conversation.service:73), y
-            // hasta acá enviar o recibir un mensaje NO sacaba a nadie de ahí. Una
-            // vez oculta, la charla quedaba invisible PARA SIEMPRE: le escribías y
-            // el mensaje se guardaba y le llegaba, pero no aparecía en tu panel ni
-            // buscándola por nombre. Y al revés era peor: si el otro había ocultado
-            // su chat con vos, te escribía y no te enterabas nunca — el mensaje
-            // entraba a la base y desaparecía de su vista. Confirmado contra la
-            // base viva el 26/8 (5 chats 1-a-1 ocultos en la cuenta de Emilio).
-            //
-            // Criterio (decidido con Emilio): OCULTAR es ordenar la lista, no
-            // silenciar. Para "no me contactes" ya existe el BLOQUEO, que es una
-            // función aparte y que este mismo handler ya respeta más arriba.
-            //
-            // SOLO en la rama 1-a-1, a propósito. En el chat de un vínculo el
-            // `hiddenBy` es DELIBERADO: al rechazar un trueque el sistema te saca
-            // del chat (bondLink.service:670). Des-ocultar ahí te volvería a meter
-            // en una conversación de la que saliste. Las ramas de grupo y bondLink
-            // NO se tocan.
-            //
-            // Los ids se convierten a ObjectId explícitamente.
-            //
-            // CORRECCIÓN (27/8, panel adversarial). El comentario original decía
-            // que "un `$pull` que no castea no falla: no saca nada y no avisa".
-            // Es FALSO acá, y los dos revisores lo midieron por separado: sobre un
-            // path tipado `[ObjectId]`, mongoose SÍ castea los strings, y cuando NO
-            // puede castear tira `CastError` — falla RUIDOSO, no callado. La frase
-            // vale sólo para el driver crudo SIN schema, que es el caso de una
-            // consulta de diagnóstico que me había fallado el día anterior: la
-            // generalicé mal.
-            //
-            // Ninguna de las dos vías es "la segura", y conviene ser exacto porque
-            // una versión anterior de este comentario también se pasó de la raya.
-            // Medido con el mongoose de este repo, sobre `$pull:{hiddenBy:{$in:[v]}}`:
-            //   - string hex válido → ObjectId por las dos vías. Igual.
-            //   - string basura     → tiran las dos (BSONError vs CastError). Igual.
-            //   - undefined / null  → SILENCIOSAS LAS DOS: el cast explícito devuelve
-            //     un id AL AZAR (documentado en utilities/objectId.ts) y la vía cruda
-            //     castea a `null` sin tirar. Para un `$pull` las dos son inertes.
-            // O sea: el cast explícito no arregla ni empeora nada acá. Queda como
-            // redundancia defensiva ante un cambio futuro de mongoose, NO como lo que
-            // hace funcionar el fix. Lo que de verdad protege son las validaciones de
-            // aguas arriba: `receiverId` pasa por `isValid` unas líneas más arriba y
-            // `currentUserId` por `esObjectIdUsable` en socket.ts.
-            await Conversation.updateOne(
-                { _id: conversation?._id },
-                {
-                    $set: { lastMessage: saveMessage._id },
-                    $pull: {
-                        hiddenBy: {
-                            $in: [
-                                new Types.ObjectId(currentUserId),
-                                new Types.ObjectId(receiverId),
-                            ],
-                        },
-                    },
-                }
-            );
-            // send to the frontend only new message data ---------------
-            io.to(currentUserId.toString()).emit(
-                `message-${data?.receiver}`,
-                populatedMessage
-            );
-            io.to(data?.receiver.toString()).emit(
-                `message-${currentUserId}`,
-                populatedMessage
-            );
-
-            //send conversation
-            const conversationSender = await getSingleConversation(
-                conversation._id.toString(),
+            // El MISMO núcleo que usa `POST /message/send`: valida el receptor y el
+            // bloqueo, crea la conversación si falta, filtra los adjuntos, guarda,
+            // des-oculta el chat para los dos y emite. Las reglas del 1-a-1 viven
+            // en helper/createOneToOneMessage.ts, no acá, para que ningún
+            // transporte pueda saltárselas.
+            const result = await createOneToOneMessage({
                 currentUserId,
-                'participants'
-            );
-            const conversationReceiver = await getSingleConversation(
-                conversation._id.toString(),
-                data?.receiver,
-                'participants'
-            );
-            io.to(currentUserId.toString()).emit(
-                'conversation',
-                conversationSender
-            );
-            io.to(data?.receiver).emit('conversation', conversationReceiver);
-
-            // Aviso de mensajes no leidos al receptor (B.5).
-            await emitUnreadCount(io, data?.receiver);
+                receiver: data.receiver,
+                text: msgText,
+                imageUrl: data?.imageUrl,
+                videoUrl: data?.videoUrl,
+                pdfUrl: data?.pdfUrl,
+                clientId: data?.clientId,
+                moderation,
+                io,
+            });
+            if (result.error) {
+                emitError(socket, result.error);
+            }
         } else if (data?.projectId) {
             // Proyectos/objetos APAGADOS (invariante del proyecto: nada de eso debe
             // funcionar de ninguna manera por ahora). Aunque las rutas /project
@@ -357,16 +211,21 @@ const handleChat = async (
 
             // create new message
             const messageData = {
-                text: data.text,
+                text: msgText,
                 // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
                 // el socket; sin este filtro podía inyectar cualquier link).
-                imageUrl: filterCdnAttachmentUrls(data.imageUrl),
-                videoUrl: filterCdnAttachmentUrls(data.videoUrl),
-                pdfUrl: filterCdnAttachmentUrls(data.pdfUrl),
+                imageUrl: attachments.kept.imageUrl,
+                videoUrl: attachments.kept.videoUrl,
+                pdfUrl: attachments.kept.pdfUrl,
                 msgByUserId: currentUserId,
                 conversationId: chat?._id,
             };
             const saveMessage = await Message.create(messageData);
+            notifyDroppedAttachments(socket, attachments, {
+                conversationId: messageData.conversationId,
+                messageId: saveMessage._id,
+                clientId: data?.clientId,
+            });
             const populatedMessage = await saveMessage.populate({
                 path: 'msgByUserId',
                 select: 'name profile_image',
@@ -472,16 +331,21 @@ const handleChat = async (
 
             // create new message
             const messageData = {
-                text: data.text,
+                text: msgText,
                 // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
                 // el socket; sin este filtro podía inyectar cualquier link).
-                imageUrl: filterCdnAttachmentUrls(data.imageUrl),
-                videoUrl: filterCdnAttachmentUrls(data.videoUrl),
-                pdfUrl: filterCdnAttachmentUrls(data.pdfUrl),
+                imageUrl: attachments.kept.imageUrl,
+                videoUrl: attachments.kept.videoUrl,
+                pdfUrl: attachments.kept.pdfUrl,
                 msgByUserId: currentUserId,
                 conversationId: chat?._id,
             };
             const saveMessage = await Message.create(messageData);
+            notifyDroppedAttachments(socket, attachments, {
+                conversationId: messageData.conversationId,
+                messageId: saveMessage._id,
+                clientId: data?.clientId,
+            });
             const populatedMessage = await saveMessage.populate({
                 path: 'msgByUserId',
                 select: 'name profile_image',
@@ -603,16 +467,21 @@ const handleChat = async (
 
             // create new message
             const messageData = {
-                text: data.text,
+                text: msgText,
                 // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
                 // el socket; sin este filtro podía inyectar cualquier link).
-                imageUrl: filterCdnAttachmentUrls(data.imageUrl),
-                videoUrl: filterCdnAttachmentUrls(data.videoUrl),
-                pdfUrl: filterCdnAttachmentUrls(data.pdfUrl),
+                imageUrl: attachments.kept.imageUrl,
+                videoUrl: attachments.kept.videoUrl,
+                pdfUrl: attachments.kept.pdfUrl,
                 msgByUserId: currentUserId,
                 conversationId: chat?._id,
             };
             const saveMessage = await Message.create(messageData);
+            notifyDroppedAttachments(socket, attachments, {
+                conversationId: messageData.conversationId,
+                messageId: saveMessage._id,
+                clientId: data?.clientId,
+            });
             const populatedMessage = await saveMessage.populate({
                 path: 'msgByUserId',
                 select: 'name profile_image',
@@ -659,81 +528,12 @@ const handleChat = async (
     // send---------------------------------
     socket.on('seen', async ({ conversationId }) => {
       try {
-        // El front ahora emite `seen` con payload SOLO { conversationId }.
-        // INYECCIÓN NoSQL: el `if (!conversationId)` NO alcanza, porque un OBJETO
-        // es truthy. `sanitizeMongo` es middleware de EXPRESS, así que los payloads
-        // de socket.io NO pasan por él: lo que manda el cliente llega crudo.
-        // Verificado: mongoose CONSERVA el operador tanto en `findById` como en el
-        // `updateMany` de más abajo. Con `conversationId = {"$gte": "<id>"}`, el
-        // `findById` devuelve el primer documento en orden natural —y los ObjectId
-        // son cronológicos, así que con unos pocos intentos cae en una conversación
-        // propia y el chequeo de participante pasa— y después el `updateMany` corre
-        // con el operador INTACTO sobre los mensajes de TODAS las conversaciones
-        // posteriores a ese límite: le mete su profileId en el `seenBy` de mensajes
-        // ajenos y rompe el contador de no leídos de toda la plataforma.
-        // Las otras ramas de este archivo se salvan porque validan con `isValid`.
-        if (!esObjectIdUsable(conversationId)) return;
-
-        // Seguridad (IDOR): solo un participante puede marcar la conversacion como
-        // leida. Sin este chequeo, cualquiera con el id podria agregarse al seenBy
-        // de mensajes de una conversacion ajena.
-        const conversation = await Conversation.findById(conversationId).select(
-            'participants'
-        );
-        if (
-            !conversation ||
-            !isParticipant(conversation.participants, currentUserId.toString())
-        ) {
-            return;
-        }
-
-        // Marcar como vistos (seenBy) todos los mensajes de esta conversacion
-        // que NO fueron enviados por el usuario que abre la conversacion.
-        // Unificado sobre `seenBy` (no existe el campo `seen` en el schema).
-        // Defensa en profundidad: se usa `conversation._id` (el id REAL del
-        // documento que ya se validó como propio), no el valor que mandó el
-        // cliente. Aunque la guarda de arriba ya corta los operadores, así el
-        // `updateMany` opera por construcción sobre UNA conversación verificada.
-        await Message.updateMany(
-            {
-                conversationId: conversation._id,
-                msgByUserId: { $ne: currentUserId },
-            },
-            { $addToSet: { seenBy: currentUserId } }
-        );
-
-        // Refrescar el contador de no-leidos del LECTOR (fuente unica): baja el
-        // badge + quita la negrita al leer, del lado servidor (multi-dispositivo).
-        await emitUnreadCount(io, currentUserId.toString());
-
-        // Derivar el OTRO participante desde la conversacion (ya la tenemos arriba).
-        const otherId = conversation?.participants
-            ?.map((p: any) => p.toString())
-            .find((id: string) => id !== currentUserId.toString());
-
-        //send conversation --------------
-        const conversationSender = await getSingleConversation(
-            conversation._id.toString(),
-            currentUserId as string,
-            'participants'
-        );
-        if (conversationSender) {
-            io.to(currentUserId.toString()).emit(
-                'conversation',
-                conversationSender
-            );
-        }
-
-        if (otherId) {
-            const conversationReceiver = await getSingleConversation(
-                conversation._id.toString(),
-                otherId,
-                'participants'
-            );
-            if (conversationReceiver) {
-                io.to(otherId).emit('conversation', conversationReceiver);
-            }
-        }
+        // Las guardas (NoSQL crudo, IDOR) viven en markSeen, que es el mismo
+        // código que usa `POST /message/mark-seen`; duplicarlas acá es la forma
+        // clásica de que un camino se arregle y el otro no. El resultado se
+        // ignora a propósito: como antes, el socket no avisa de un id inválido
+        // ni de un no-participante (no le entrega nada nuevo a nadie).
+        await markSeen({ conversationId, currentUserId, io });
       } catch (err: any) {
         emitError(socket, {
             code: 500,

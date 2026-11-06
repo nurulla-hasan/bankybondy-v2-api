@@ -25,6 +25,11 @@ router.patch(
     validateRequest(chatGroupValidations.updateChatGroupData),
     chatGroupController.updateGroupData
 );
+router.get(
+    '/get/:id',
+    auth(USER_ROLE.user),
+    chatGroupController.getGroupMembers
+);
 router.post(
     '/add-member/:id',
     auth(USER_ROLE.user),

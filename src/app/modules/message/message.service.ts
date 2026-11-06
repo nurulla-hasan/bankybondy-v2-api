@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import Conversation from '../conversation/conversation.model';
-import { escapeRegex } from '../../utilities/escapeRegex';
+import { buildMessagesPipeline } from './message.pipeline';
 import Message from './message.model';
 
 import httpStatus from 'http-status';
@@ -153,59 +153,16 @@ const getMessages = async (
     // en la lista, asi que filtrar sus mensajes no cambia lo visible.
     const blockedObjectIds = await getBlockedObjectIdsFor(profileId);
 
-    const messages = await Message.aggregate([
-        {
-            $match: {
-                conversationId: toObjectId(conversationId, 'conversation id'),
-                text: { $regex: escapeRegex(searchTerm), $options: 'i' },
-                msgByUserId: { $nin: blockedObjectIds },
-            },
-        },
-        {
-            $lookup: {
-                from: 'normalusers',
-                localField: 'msgByUserId',
-                foreignField: '_id',
-                as: 'userDetails',
-            },
-        },
-        { $unwind: '$userDetails' },
-        {
-            $addFields: {
-                isMyMessage: {
-                    $eq: ['$msgByUserId', toObjectId(profileId, 'profile id')],
-                },
-            },
-        },
-        {
-            // M2: un mensaje BORRADO (isDeleted) ya no debe viajar con su
-            // contenido en el payload. Antes se devolvía text/imageUrl/videoUrl/
-            // pdfUrl igual y el front solo lo ocultaba, pero la data seguía en la
-            // respuesta de red. Con $cond se anula el contenido cuando isDeleted.
-            $project: {
-                text: { $cond: ['$isDeleted', null, '$text'] },
-                imageUrl: { $cond: ['$isDeleted', null, '$imageUrl'] },
-                videoUrl: { $cond: ['$isDeleted', null, '$videoUrl'] },
-                pdfUrl: { $cond: ['$isDeleted', null, '$pdfUrl'] },
-                seen: 1,
-                msgByUserId: 1,
-                conversationId: 1,
-                createdAt: 1,
-                updatedAt: 1,
-                isDeleted: 1,
-                'userDetails.name': 1,
-                'userDetails.profile_image': 1,
-                isMyMessage: 1,
-            },
-        },
-        { $sort: { createdAt: -1 } },
-        {
-            $facet: {
-                result: [{ $skip: skip }, { $limit: limit }],
-                totalCount: [{ $count: 'total' }],
-            },
-        },
-    ]);
+    const messages = await Message.aggregate(
+        buildMessagesPipeline({
+            conversationObjectId: toObjectId(conversationId, 'conversation id'),
+            requesterObjectId: toObjectId(profileId, 'profile id'),
+            searchTerm,
+            skip,
+            limit,
+            blockedObjectIds,
+        })
+    );
 
     const result = messages[0]?.result || [];
     const total = messages[0]?.totalCount[0]?.total || 0;
