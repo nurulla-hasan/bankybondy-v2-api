@@ -20,7 +20,11 @@ import {
 
 const getConversation = async (
     profileId: string,
-    query: Record<string, unknown>
+    query: Record<string, unknown>,
+    // El listado normal omite lo que ESTE usuario oculto. La pantalla "chats
+    // ocultos" es la misma lista con el filtro invertido: así las dos comparten
+    // pipeline y no pueden divergir en forma ni en reglas de bloqueo.
+    hidden = false
 ) => {
     const filters = pick(query, ['searchTerm', 'email', 'name']);
 
@@ -74,7 +78,10 @@ const getConversation = async (
                 participants: new Types.ObjectId(profileId),
                 // B.7 (Tanda 2): excluir del listado las conversaciones que ESTE
                 // usuario oculto (soft-hide). No afecta al otro participante.
-                hiddenBy: { $ne: new Types.ObjectId(profileId) },
+                // `hidden` invierte el filtro para la pantalla de chats ocultos.
+                hiddenBy: hidden
+                    ? new Types.ObjectId(profileId)
+                    : { $ne: new Types.ObjectId(profileId) },
             },
         },
         {
@@ -344,6 +351,11 @@ const getConversation = async (
     };
 };
 
+const getHiddenConversations = async (
+    profileId: string,
+    query: Record<string, unknown>
+) => getConversation(profileId, query, true);
+
 const getConversationMediaFiles = async (
     profileId: string,
     conversationId: string,
@@ -444,6 +456,7 @@ const setConversationHidden = async (
 
 const ConversationService = {
     getConversation,
+    getHiddenConversations,
     getConversationMediaFiles,
     setConversationHidden,
 };

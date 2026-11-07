@@ -10,6 +10,12 @@ router.get(
     auth(USER_ROLE.user),
     ConversationController.getChatList
 );
+// Chats que ESTE usuario oculto — la contraparte de `/hide`, para poder des-ocultar.
+router.get(
+    '/get-hidden-chats',
+    auth(USER_ROLE.user),
+    ConversationController.getHiddenChatList
+);
 router.get(
     '/get-media-files/:id',
     auth(USER_ROLE.user),

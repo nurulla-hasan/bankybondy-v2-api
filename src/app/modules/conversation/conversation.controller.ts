@@ -16,6 +16,20 @@ const getChatList = catchAsync(async (req, res) => {
     });
 });
 
+const getHiddenChatList = catchAsync(async (req, res) => {
+    const result = await ConversationService.getHiddenConversations(
+        req?.user?.profileId,
+        req.query
+    );
+
+    sendResponse(res, {
+        statusCode: 200,
+        success: true,
+        message: 'Hidden conversations retrieved successfully',
+        data: result,
+    });
+});
+
 const getConversationMediaFiles = catchAsync(async (req, res) => {
     const result = await ConversationService.getConversationMediaFiles(
         req?.user?.profileId,
@@ -63,6 +77,7 @@ const unhideConversation = catchAsync(async (req, res) => {
 
 const ConversationController = {
     getChatList,
+    getHiddenChatList,
     getConversationMediaFiles,
     hideConversation,
     unhideConversation,
