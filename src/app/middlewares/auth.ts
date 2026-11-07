@@ -6,6 +6,7 @@ import httpStatus from 'http-status';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import config from '../config';
 import { TUserRole } from '../modules/user/user.interface';
+import { SOCKET_TOKEN_SCOPE } from '../helper/socketToken';
 import { User } from '../modules/user/user.model';
 import { esObjectIdUsable } from '../utilities/objectId';
 
@@ -40,6 +41,20 @@ const auth = (...requiredRoles: TUserRole[]) => {
 
             if (!decoded) {
                 throw new AppError(httpStatus.UNAUTHORIZED, 'Token is expired');
+            }
+
+            // Un token de handshake de socket NO puede abrir la API HTTP. Se firma
+            // con el MISMO `jwt_access_secret` (así `socket.ts` lo acepta sin
+            // tocarlo), y sin este guard un `/auth/socket-token` robado-valiente
+            // sería un access token normal durante 30 minutos. Ningún token emitido
+            // hoy por esta API lleva la claim `scope` (verificado en los 6 puntos
+            // que firman), así que esto no rechaza nada que funcione ahora.
+            if (decoded.scope === SOCKET_TOKEN_SCOPE) {
+                throw new AppError(
+                    httpStatus.UNAUTHORIZED,
+                    'Invalid session token',
+                    'INVALID_TOKEN'
+                );
             }
 
             // ESCALADA DE PRIVILEGIO (la razón principal de este bloque):

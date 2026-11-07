@@ -14,6 +14,7 @@ import { normalizeMessageText } from '../helper/normalizeMessageText';
 import { emitUnreadCount } from '../helper/emitUnreadCount';
 import { markSeen } from '../helper/markSeen';
 import { createOneToOneMessage } from '../helper/createOneToOneMessage';
+import { shapeSentMessage } from '../helper/messageEmitShape';
 import {
     emptyMessageFailure,
     moderationFailure,
@@ -214,6 +215,9 @@ const handleChat = async (
                 path: 'msgByUserId',
                 select: 'name profile_image',
             });
+            // B1: se emite la forma común (helper/messageEmitShape.ts), no el doc
+            // crudo — mismas claves que entrega `get-messages`.
+            const clientMessage = shapeSentMessage(populatedMessage);
             // A16 (2a parte): mismo des-ocultar que en 1-a-1, ahora para el chat
             // de GRUPO. El fix original cerro solo la rama 1-a-1 y la clase quedo
             // abierta aca: el boton "Ocultar" se ofrece para CUALQUIER tipo de
@@ -242,7 +246,7 @@ const handleChat = async (
             await Promise.all(
                 chat.participants.map(async (participantId: Types.ObjectId) => {
                     const uid = participantId.toString();
-                    io.to(uid).emit(`message-${groupId}`, populatedMessage);
+                    io.to(uid).emit(`message-${groupId}`, clientMessage);
                     const singleConversation = await getSingleConversation(
                         chat._id.toString(),
                         uid,
@@ -350,6 +354,9 @@ const handleChat = async (
                 path: 'msgByUserId',
                 select: 'name profile_image',
             });
+            // B1: se emite la forma común (helper/messageEmitShape.ts), no el doc
+            // crudo — mismas claves que entrega `get-messages`.
+            const clientMessage = shapeSentMessage(populatedMessage);
             await Conversation.updateOne(
                 { _id: chat?._id },
                 {
@@ -363,7 +370,7 @@ const handleChat = async (
                     // Los que salieron del chat (hiddenBy) no reciben el mensaje ni
                     // la re-inserción en vivo del chat que ocultaron.
                     if (hiddenBy.includes(uid)) return;
-                    io.to(uid).emit(`message-${bondLinkId}`, populatedMessage);
+                    io.to(uid).emit(`message-${bondLinkId}`, clientMessage);
                     const singleConversation = await getSingleConversation(
                         chat._id.toString(),
                         uid,

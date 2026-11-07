@@ -1,6 +1,14 @@
 import httpStatus from 'http-status';
+import config from '../../config';
 import catchAsync from '../../utilities/catchasync';
 import sendResponse from '../../utilities/sendResponse';
+import { createToken } from '../user/user.utils';
+import { TUserRole } from '../user/user.interface';
+import {
+    SOCKET_TOKEN_EXPIRES_IN,
+    SOCKET_TOKEN_TTL_SECONDS,
+    buildSocketTokenClaims,
+} from '../../helper/socketToken';
 import authServices from './auth.services';
 import AppError from '../../error/appError';
 import {
@@ -107,6 +115,44 @@ const refreshToken = catchAsync(async (req, res) => {
   });
 });
 
+// B0 (bankybondy-v2): token de handshake para Socket.IO.
+//
+// El front con cookie HttpOnly no puede leer el access token, y el socket exige
+// un JWT en `handshake.auth.token` (`socket.ts:318`). Este endpoint, ya
+// autenticado por la cookie, devuelve un token de 30 minutos que sirve PARA ESO
+// Y NADA MÁS: `middlewares/auth.ts` rechaza la claim `scope:'socket'` en la API
+// HTTP, así que robar este token no abre la API. El socket tampoco lo miraba
+// antes ni lo mira ahora — sólo lee `decode.id` y vuelve a chequear el estado del
+// usuario en la DB, con lo que un usuario bloqueado/borrado/sin verificar sigue
+// sin poder conectar.
+const socketToken = catchAsync(async (req, res) => {
+    const claims = buildSocketTokenClaims(req.user);
+    if (!claims) {
+        throw new AppError(
+            httpStatus.UNAUTHORIZED,
+            'Your session is missing its profile. Please log in again.',
+            // Mismo código que `auth.ts` cuando el profileId no sirve: la sesión
+            // está muerta y el front tiene que deslogear, no reintentar.
+            'PROFILE_MISSING'
+        );
+    }
+    const token = createToken(
+        // Cast de tipos sólo: `req.user` sale de un JwtPayload (role: string) y
+        // `createToken` declara TUserRole. El valor ES el rol fresco de la DB que
+        // puso el middleware (`auth.ts:166-172`); agrandarle el tipo al util
+        // compartido por este detalle sería peor.
+        { ...claims, role: claims.role as TUserRole },
+        config.jwt_access_secret as string,
+        SOCKET_TOKEN_EXPIRES_IN
+    );
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: 'Socket token retrieved successfully',
+        data: { token, expiresIn: SOCKET_TOKEN_TTL_SECONDS },
+    });
+});
+
 // Logout: borra las cookies HttpOnly (el browser no puede hacerlo desde JS).
 // Idempotente y público.
 const logoutUser = catchAsync(async (req, res) => {
@@ -209,6 +255,7 @@ const authControllers = {
   loginUser,
   changePassword,
   refreshToken,
+  socketToken,
   logoutUser,
   forgetPassword,
   resetPassword,

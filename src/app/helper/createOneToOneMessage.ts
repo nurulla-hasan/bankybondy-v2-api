@@ -17,6 +17,7 @@ import {
 } from './messageRejection';
 import { getSingleConversation } from './getSingleConversation';
 import { emitUnreadCount } from './emitUnreadCount';
+import { shapeSentMessage } from './messageEmitShape';
 
 export type OneToOneInput = {
     currentUserId: string;
@@ -152,6 +153,11 @@ export const createOneToOneMessage = async (
         select: 'name profile_image',
     });
 
+    // B1: la forma que se entrega al cliente (socket Y respuesta REST) es la del
+    // helper común, no el documento crudo. Ver helper/messageEmitShape.ts para qué
+    // se agrega, qué se saca y por qué `isMyMessage`/`seen` NO van acá.
+    const clientMessage = shapeSentMessage(populatedMessage);
+
     // DES-OCULTAR a los dos. El listado de chats excluye toda conversación con tu
     // id en `hiddenBy`, y hasta acá enviar o recibir un mensaje NO sacaba a nadie
     // de ahí: una vez oculta, la charla quedaba invisible PARA SIEMPRE — le
@@ -213,9 +219,9 @@ export const createOneToOneMessage = async (
     if (io) {
         io.to(currentUserId.toString()).emit(
             `message-${receiverId}`,
-            populatedMessage
+            clientMessage
         );
-        io.to(receiverId).emit(`message-${currentUserId}`, populatedMessage);
+        io.to(receiverId).emit(`message-${currentUserId}`, clientMessage);
 
         //send conversation
         const conversationSender = await getSingleConversation(
@@ -235,5 +241,5 @@ export const createOneToOneMessage = async (
         await emitUnreadCount(io, receiverId);
     }
 
-    return { message: populatedMessage, conversation };
+    return { message: clientMessage, conversation };
 };

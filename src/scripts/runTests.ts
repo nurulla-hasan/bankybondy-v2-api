@@ -21,6 +21,8 @@ import { runScrubDeletedPreviewTests } from '../app/helper/scrubDeletedPreview.t
 import { runNormalizeMessageTextTests } from '../app/helper/normalizeMessageText.test';
 import { runMarkSeenTests } from '../app/helper/markSeen.test';
 import { runMessageRejectionTests } from '../app/helper/messageRejection.test';
+import { runSocketTokenTests } from '../app/helper/socketToken.test';
+import { runMessageEmitShapeTests } from '../app/helper/messageEmitShape.test';
 import { runEmitConversationSnapshotsTests } from '../app/helper/emitConversationSnapshots.test';
 import { runChatGroupRosterTests } from '../app/modules/chatGroup/chatGroup.roster.test';
 import { runMediaPipelineTests } from '../app/modules/conversation/media.pipeline.test';
@@ -69,6 +71,14 @@ const main = async (): Promise<void> => {
         {
             nombre: 'messageRejection (los dos rechazos del envio)',
             correr: runMessageRejectionTests,
+        },
+        {
+            nombre: 'socketToken (claims del handshake B0)',
+            correr: runSocketTokenTests,
+        },
+        {
+            nombre: 'messageEmitShape (forma del mensaje recién enviado B1)',
+            correr: runMessageEmitShapeTests,
         },
         {
             nombre: 'emitConversationSnapshots (tipo → campo poblado)',

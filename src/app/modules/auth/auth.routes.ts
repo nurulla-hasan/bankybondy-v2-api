@@ -33,6 +33,15 @@ router.post(
     authControllers.refreshToken
 );
 
+// B0: token corto para el handshake de Socket.IO (lo pide el front que usa
+// cookies HttpOnly y por lo tanto no puede leer el access token). Va detrás de
+// auth(): quien ya está logueado puede mintearlo; nadie más.
+router.get(
+    '/socket-token',
+    auth(USER_ROLE.user),
+    authControllers.socketToken
+);
+
 // Logout: borra la cookie HttpOnly del refresh token. Público (idempotente).
 router.post('/logout', authControllers.logoutUser);
 
