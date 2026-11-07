@@ -76,6 +76,92 @@ const withSignedMedia = (doc: any) => {
     return o;
 };
 
+// Subida en dos pasos: /upload-audio deja los archivos en S3 bajo el prefijo del
+// dueño y /create-audio recibe esas URLs en JSON. Estas helpers son la frontera
+// de confianza entre una URL que manda el cliente y lo que el servidor acepta
+// publicar o borrar (mismo criterio que `file.controller.deleteFiles`).
+const AUDIO_UPLOAD_DIRS = {
+    audio: 'uploads/audios',
+    cover: 'uploads/images/audio_cover',
+} as const;
+
+// Devuelve la key S3 sólo si la URL es del CDN configurado Y vive bajo la carpeta
+// del dueño. El `pathname` se decodifica igual que en `deleteFileFromS3` para que
+// checks y borrado miren exactamente la misma key.
+const ownedUploadKey = (
+    url: string,
+    ownerId: string,
+    kind: keyof typeof AUDIO_UPLOAD_DIRS
+): string | null => {
+    if (typeof url !== 'string' || !url) return null;
+    let key: string;
+    try {
+        const parsed = new URL(url);
+        const cdnHost = new URL(process.env.CLOUDFRONT_URL as string).host;
+        if (parsed.host !== cdnHost) return null;
+        key = decodeURIComponent(parsed.pathname).replace(/^\/+/, '');
+    } catch {
+        return null;
+    }
+    if (!key || key.includes('..')) return null;
+    return key.startsWith(`${AUDIO_UPLOAD_DIRS[kind]}/${ownerId}/`)
+        ? key
+        : null;
+};
+
+// Un archivo staged sólo puede publicarse una vez: si otro audio ya apunta a la
+// URL, el request se rechaza (evita reutilizar el archivo de un audio existente).
+const assertAudioUploadsClaimable = async (urls: string[]): Promise<void> => {
+    if (!urls.length) return;
+    const claimed = await Audio.exists({
+        $or: [{ audio_url: { $in: urls } }, { cover_image: { $in: urls } }],
+    });
+    if (claimed) {
+        throw new AppError(
+            httpStatus.CONFLICT,
+            'This file was already published'
+        );
+    }
+};
+
+// Valida una URL pre-subida antes de crear el audio (host + prefijo + claim).
+const assertPreparedAudioUpload = async (
+    ownerId: string,
+    url: string,
+    kind: keyof typeof AUDIO_UPLOAD_DIRS
+): Promise<void> => {
+    if (!ownedUploadKey(url, ownerId, kind)) {
+        throw new AppError(
+            httpStatus.FORBIDDEN,
+            `You can only use ${kind} files you uploaded`
+        );
+    }
+    await assertAudioUploadsClaimable([url]);
+};
+
+// Borra archivos staged que nunca se publicaron (diálogo cerrado/batido). Se
+// rechaza el lote entero si alguna URL no es del dueño o ya está publicada.
+const deleteUploadedAudioFiles = async (
+    ownerId: string,
+    urls: string[]
+): Promise<{ deleted: number }> => {
+    const keys = urls.map((url) => {
+        const key =
+            ownedUploadKey(url, ownerId, 'audio') ??
+            ownedUploadKey(url, ownerId, 'cover');
+        if (!key) {
+            throw new AppError(
+                httpStatus.FORBIDDEN,
+                'You can only delete files you uploaded'
+            );
+        }
+        return key;
+    });
+    await assertAudioUploadsClaimable(urls);
+    await Promise.all(urls.map((url) => deleteFileFromS3(url)));
+    return { deleted: keys.length };
+};
+
 // Create Audio
 // D.5 (Tanda 2): la subida NO bloquea la UI. Se crea el registro en estado
 // 'processing' y se devuelve de inmediato; la moderacion por IA + verificacion
@@ -1132,6 +1218,8 @@ const recordListen = async (
 
 const AudioService = {
     createAudio,
+    assertPreparedAudioUpload,
+    deleteUploadedAudioFiles,
     processAudioModeration,
     getModerationStatus,
     getAllAudios,

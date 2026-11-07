@@ -145,18 +145,22 @@ export const uploadFile = () => {
 
             const name = Date.now() + '-' + sanitizedOriginalName;
 
-            // IDOR de archivos de chat: los archivos de CONVERSACIÓN se namespacean
-            // por dueño (profileId del que sube). Así el endpoint /delete-files puede
-            // exigir que la key pertenezca al que borra, y un usuario no puede borrar
-            // los adjuntos de chat de otro aunque conozca/adivine la URL.
-            const CONVERSATION_FIELDS = [
+            // IDOR de archivos subidos: los adjuntos de chat se namespacean por
+            // dueño (profileId del que sube) desde siempre. Los archivos de audio
+            // (audio y portada) hacen lo mismo desde la subida en dos pasos: así
+            // /audio/delete-upload y /audio/create-audio pueden exigir que la URL
+            // pertenezca al que la manda, y un usuario no puede borrar ni publicar
+            // archivos de otro aunque conozca la URL.
+            const OWNER_NAMESPACED_FIELDS = [
                 'conversation_image',
                 'conversation_pdf',
                 'conversation_video',
+                'audio',
+                'audio_cover',
             ];
             const ownerId = (req as any)?.user?.profileId;
             const fullPath =
-                CONVERSATION_FIELDS.includes(file.fieldname) && ownerId
+                OWNER_NAMESPACED_FIELDS.includes(file.fieldname) && ownerId
                     ? `${uploadPath}/${ownerId}/${name}`
                     : `${uploadPath}/${name}`;
 

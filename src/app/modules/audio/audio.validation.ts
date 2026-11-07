@@ -37,6 +37,9 @@ export const createAudioValidationSchema = z.object({
         audioTopic: z.string().length(24, 'Invalid audioTopic ID'),
         title: z.string({ required_error: 'Title is required' }),
         description: z.string({ required_error: 'Description is required' }),
+        // URL ya staged por /upload-audio (subida en dos pasos). El controller
+        // valida host, prefijo del dueño y que no esté publicada.
+        audio_url: z.string().optional(),
         cover_image: z.string().optional(),
         tags: z.array(z.string()).optional(),
         duration: z.number({ required_error: 'Duration is required' }),

@@ -3,12 +3,23 @@
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
+import os from 'node:os';
 import OpenAI from 'openai';
 import path from 'path';
 import { pipeline } from 'node:stream/promises';
 
-// Ensure ffmpeg path is set (important when running via PM2)
-ffmpeg.setFfmpegPath('/usr/bin/ffmpeg');
+// Ensure ffmpeg path is set (important when running via PM2). On Windows there is
+// no /usr/bin/ffmpeg, so the binary from PATH is the only sane default for local
+// development; override with AUDIO_FFMPEG_PATH when needed.
+const FFMPEG_PATH =
+    process.env.AUDIO_FFMPEG_PATH ||
+    (process.platform === 'win32' ? 'ffmpeg' : '/usr/bin/ffmpeg');
+ffmpeg.setFfmpegPath(FFMPEG_PATH);
+
+// `/tmp` only exists on POSIX; on Windows `path.join('/tmp', …)` becomes
+// `C:\tmp`, which usually does not exist and makes every analysis fail as a
+// technical error before OpenAI is ever reached.
+const TEMP_DIR = os.tmpdir();
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -117,7 +128,7 @@ const convertToMp3 = (inputPath: string, outputPath: string) => {
 export const analyzeConversationAudio = async (audioUrl: string) => {
     // detect extension from url
     const ext = path.extname(audioUrl) || '.mp3';
-    const originalPath = path.join('/tmp', `audio-${Date.now()}${ext}`);
+    const originalPath = path.join(TEMP_DIR, `audio-${Date.now()}${ext}`);
     let finalAudioPath = originalPath;
     let mp3Path = '';
 
@@ -178,7 +189,7 @@ export const analyzeConversationAudio = async (audioUrl: string) => {
             ext.toLowerCase() !== '.mp3' ||
             tamOriginal > TOPE_TRANSCRIPCION_BYTES
         ) {
-            mp3Path = path.join('/tmp', `audio-${Date.now()}.mp3`);
+            mp3Path = path.join(TEMP_DIR, `audio-${Date.now()}.mp3`);
             await convertToMp3(originalPath, mp3Path);
             finalAudioPath = mp3Path;
         }

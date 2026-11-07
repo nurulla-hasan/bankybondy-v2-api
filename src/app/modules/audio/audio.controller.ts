@@ -2,6 +2,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import httpStatus from 'http-status';
+import AppError from '../../error/appError';
 import { getCloudFrontUrl } from '../../helper/mutler-s3-uploader';
 import catchAsync from '../../utilities/catchasync';
 import sendResponse from '../../utilities/sendResponse';
@@ -18,15 +19,36 @@ import AudioService from './audio.service';
 // El front hace polling del estado (GET /audio/moderation-status/:audioId) o lo
 // lee del registro (my-audios / single-audio) para saber cuando esta listo.
 const createAudio = catchAsync(async (req, res) => {
-    const audiFile: any = req.files?.audio;
-    if (!audiFile) {
-        throw new Error('Audio file is required');
+    const ownerId = String(req.user.profileId);
+    const audioFile: any = req.files?.audio?.[0];
+    const coverFile: any = req.files?.audio_cover?.[0];
+
+    // Subida en dos pasos (cliente actual): los archivos ya están en S3 y llegan
+    // como URLs, validadas contra el CDN y el prefijo del dueño. Los clientes que
+    // suben todo en este mismo request (multipart) siguen funcionando: el archivo
+    // gana y cualquier URL que mande el body se descarta.
+    if (audioFile) {
+        req.body.audio_url = getCloudFrontUrl(audioFile.key);
+    } else if (typeof req.body.audio_url === 'string') {
+        await AudioService.assertPreparedAudioUpload(
+            ownerId,
+            req.body.audio_url,
+            'audio'
+        );
+    } else {
+        throw new AppError(httpStatus.BAD_REQUEST, 'Audio file is required');
     }
 
-    req.body.audio_url = getCloudFrontUrl(audiFile[0].key);
-    const file: any = req.files?.audio_cover;
-    if (file) {
-        req.body.cover_image = getCloudFrontUrl(file[0].key);
+    if (coverFile) {
+        req.body.cover_image = getCloudFrontUrl(coverFile.key);
+    } else if (typeof req.body.cover_image === 'string') {
+        await AudioService.assertPreparedAudioUpload(
+            ownerId,
+            req.body.cover_image,
+            'cover'
+        );
+    } else {
+        throw new AppError(httpStatus.BAD_REQUEST, 'Cover image is required');
     }
 
     // Se crea el registro en 'processing' y se responde rapido.
@@ -49,6 +71,55 @@ const createAudio = catchAsync(async (req, res) => {
                 : result),
             moderationStatus: ENUM_AUDIO_MODERATION_STATUS.PROCESSING,
         },
+    });
+});
+
+// Paso 1 de la subida en dos pasos. Deja uno o los dos archivos en S3 bajo el
+// prefijo del dueño y devuelve las URLs; el diálogo publica después con JSON, o
+// borra lo que no va a usar con deleteUploadedAudioFiles.
+const uploadAudioFiles = catchAsync(async (req, res) => {
+    const audioFile: any = req.files?.audio?.[0];
+    const coverFile: any = req.files?.audio_cover?.[0];
+    if (!audioFile && !coverFile) {
+        throw new AppError(
+            httpStatus.BAD_REQUEST,
+            'At least one file is required'
+        );
+    }
+
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: 'Files uploaded successfully',
+        data: {
+            audio_url: audioFile ? getCloudFrontUrl(audioFile.key) : null,
+            cover_image: coverFile ? getCloudFrontUrl(coverFile.key) : null,
+        },
+    });
+});
+
+// Borra archivos staged que nunca se publicaron (diálogo cancelado o archivo
+// reemplazado). Sólo acepta URLs propias y aún no publicadas.
+const deleteUploadedAudioFiles = catchAsync(async (req, res) => {
+    const files = req.body?.files;
+    if (
+        !Array.isArray(files) ||
+        files.some((file: any) => typeof file !== 'string')
+    ) {
+        throw new AppError(
+            httpStatus.BAD_REQUEST,
+            'files must be an array of URLs'
+        );
+    }
+    const result = await AudioService.deleteUploadedAudioFiles(
+        String(req.user.profileId),
+        files
+    );
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: 'Files deleted successfully',
+        data: result,
     });
 });
 
@@ -290,6 +361,8 @@ const recordListen = catchAsync(async (req, res) => {
 
 const AudioController = {
     createAudio,
+    uploadAudioFiles,
+    deleteUploadedAudioFiles,
     getModerationStatus,
     getAllAudios,
     getAudioById,

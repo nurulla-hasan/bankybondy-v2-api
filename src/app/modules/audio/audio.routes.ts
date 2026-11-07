@@ -27,6 +27,22 @@ router.post(
     AudioController.createAudio
 );
 
+// Subida en dos pasos: primero se stagean los archivos (uno o los dos), luego
+// create-audio recibe las URLs en JSON. delete-upload limpia lo que el diálogo
+// descartó antes de publicar.
+router.post(
+    '/upload-audio',
+    auth(USER_ROLE.user),
+    audioUploadLimiter,
+    uploadFile(),
+    AudioController.uploadAudioFiles
+);
+router.post(
+    '/delete-upload',
+    auth(USER_ROLE.user),
+    AudioController.deleteUploadedAudioFiles
+);
+
 // Get All Audios
 router.get(
     '/all-audios',
