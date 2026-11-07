@@ -7,7 +7,10 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "seed:bonds": "tsx src/scripts/seedBonds.ts"
+    "seed:bonds": "tsx src/scripts/seedBonds.ts",
+    "match-feed:backfill": "tsx src/scripts/backfillMatchFeed.ts",
+    "match-feed:verify": "tsx src/scripts/verifyMatchFeed.ts",
+    "match-feed:bench": "tsx src/scripts/benchMatchServe.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",

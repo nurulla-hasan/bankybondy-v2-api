@@ -15,6 +15,7 @@ import { performance } from 'perf_hooks';
 import config from '../../config';
 import { errorLogger, logger } from '../../shared/logger';
 import BondMatch from '../bondMatch/bondMatch.model';
+import BondMatchFeed from '../bondMatch/bondMatchFeed.model';
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import BondRequest from './bondRequest.model';
 import { MATCHING } from './matching.config';
@@ -111,9 +112,15 @@ const recomputeBond = async (bondId: string): Promise<void> => {
         .lean();
 
     if (!startRequest) {
+        const oid = new mongoose.Types.ObjectId(bondId);
         await BondMatch.deleteMany({
-            sourceBond: new mongoose.Types.ObjectId(bondId),
+            sourceBond: oid,
         });
+        // El read model no debe conservar filas de un bond que ya no es
+        // recomputable (pausado/borrado/enlazado): se podrían seguir sirviendo.
+        if (MATCHING.feedWrite) {
+            await BondMatchFeed.deleteMany({ bonds: oid });
+        }
         return;
     }
 
@@ -325,7 +332,22 @@ export const invalidateBondMatches = async (
         .map((a) => a.toString())
         .filter((id) => id !== bondId.toString());
     await BondMatch.deleteMany({ sourceBond: { $in: [oid, ...affected] } });
-    return affectedIds;
+
+    // Read model: se borran EXACTAMENTE las filas que mencionan al bond (dejó de
+    // ser válido para todos), y se reencolan los dueños de esas filas. Las filas
+    // ajenas al bond no se tocan: no hay que reconstruir feeds enteros.
+    if (MATCHING.feedWrite) {
+        const readers = (await BondMatchFeed.distinct('bond', {
+            bonds: oid,
+        })) as any[];
+        await BondMatchFeed.deleteMany({ bonds: oid });
+        for (const r of readers) {
+            const id = r.toString();
+            if (id !== bondId.toString()) affectedIds.push(id);
+        }
+    }
+
+    return [...new Set(affectedIds)];
 };
 
 /** Invalida las caches que tocan a `bondId` y reencola los recomputos.

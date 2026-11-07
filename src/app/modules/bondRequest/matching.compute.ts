@@ -18,6 +18,12 @@ import { BondMatchType, IMatchScoreParts } from '../bondMatch/bondMatch.interfac
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import { fetchMatchCandidates } from './matching.candidates';
 import { MATCHING } from './matching.config';
+import { persistMatchFeed } from './matching.feed';
+import {
+    bondMatchFeedTrimDeletedTotal,
+    bondMatchFeedUpsertsTotal,
+    bondMatchFeedWriteErrorsTotal,
+} from '../../middlewares/metrics';
 import { logger } from '../../shared/logger';
 import { proximoRecomputoEn } from './matching.schedule';
 import {
@@ -519,6 +525,29 @@ export const computeAndCacheMatches = async (
 ): Promise<MatchRecord[]> => {
     const records = await computeMatchesForBond(startRequest, userId);
     await persistMatches(startRequest._id.toString(), records);
+
+    // Read model por participante (expand/contract). Best-effort durante el
+    // rollout: si falla, seguimos sirviendo desde BondMatch y se loguea. Cuando
+    // el feed es la fuente de lectura, el fallo SE PROPAGA: sin filas frescas el
+    // vínculo quedaría sirviendo datos viejos, así que el job debe reintentar y
+    // NO sellar la agenda.
+    if (MATCHING.feedWrite) {
+        try {
+            const stats = await persistMatchFeed(
+                startRequest._id.toString(),
+                records
+            );
+            bondMatchFeedUpsertsTotal.inc(stats.upserts);
+            bondMatchFeedTrimDeletedTotal.inc(stats.trimmed);
+        } catch (e) {
+            bondMatchFeedWriteErrorsTotal.inc();
+            logger.error(
+                `[matching] persistMatchFeed fallo para ${startRequest._id}:`,
+                (e as Error)?.message
+            );
+            if (MATCHING.feedRead) throw e;
+        }
+    }
 
     const ahora = Date.now();
 

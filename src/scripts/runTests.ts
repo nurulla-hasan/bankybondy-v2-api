@@ -32,6 +32,7 @@ import { runSessionCodesTests } from '../app/utilities/sessionCodes.test';
 import { runQueryBuilderTests } from '../app/builder/QueryBuilder.test';
 import { runInputValidationTests } from '../app/modules/bondRequest/inputValidation.test';
 import { runMatchingScheduleTests } from '../app/modules/bondRequest/matching.schedule.test';
+import { runMatchingFeedTests } from '../app/modules/bondRequest/matching.feed.test';
 import { runSubscriptionPlanTests } from '../app/modules/normalUser/subscriptionPlans.test';
 import { runAudioModerationTests } from '../app/modules/audio/audio.moderation.test';
 import { runImageModerationTests } from '../app/helper/moderateImage.test';
@@ -52,6 +53,10 @@ const main = async (): Promise<void> => {
         {
             nombre: 'matching.schedule (TTL adaptativo / escala)',
             correr: runMatchingScheduleTests,
+        },
+        {
+            nombre: 'matching.feed (read model por participante)',
+            correr: runMatchingFeedTests,
         },
         { nombre: 'bondRequest.publicShape', correr: runPublicShapeTests },
         { nombre: 'attachmentUrl', correr: runAttachmentUrlTests },

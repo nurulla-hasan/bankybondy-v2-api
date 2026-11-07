@@ -249,6 +249,42 @@ export const MATCHING = {
         (process.env.MATCH_INCLUDE_WILDCARDS ?? 'true').toLowerCase() !== 'false',
     // Tope de comodines agregados por cómputo (acota el crecimiento del grafo O(N²)).
     wildcardCap: num(process.env.MATCH_WILDCARD_CAP, 100, { min: 1, max: 1000 }),
+
+    // ── READ MODEL POR PARTICIPANTE (BondMatchFeed) ─────────────────────────
+    // El serving ya no lee el superset entero de BondMatch (miles de docs por
+    // request): lee las N mejores filas de SU feed, con el índice
+    // { bond: 1, score: -1 }. Los flags permiten el rollout expand/contract:
+    // escribir en paralelo, backfill, shadow-read y recién después servir.
+    feedWrite:
+        (process.env.MATCH_FEED_WRITE ?? 'false').toLowerCase() === 'true',
+    feedShadow:
+        (process.env.MATCH_FEED_SHADOW ?? 'false').toLowerCase() === 'true',
+    feedRead:
+        (process.env.MATCH_FEED_READ ?? 'false').toLowerCase() === 'true',
+    // Fracción de requests que corren la comparación shadow (0–1). El shadow
+    // ejecuta el query VIEJO (el lento): muestrear es obligatorio.
+    feedShadowSample: num(process.env.MATCH_FEED_SHADOW_SAMPLE, 0.1, {
+        min: 0,
+        max: 1,
+    }),
+    // Cuántas filas se traen para re-rankear en memoria. Se sirven hasta
+    // `maxResults` (100); 4x de overscan cubre la preferencia suave `pairBias`.
+    feedScanLimit: num(process.env.MATCH_FEED_SCAN_LIMIT, 400, {
+        min: 100,
+        max: 2000,
+    }),
+    // Tope de filas por participante (poda post-recompute). Sin esto, un bond
+    // denso vuelve a acumular miles de filas por la puerta de atrás.
+    feedMaxRowsPerBond: num(process.env.MATCH_FEED_MAX_ROWS_PER_BOND, 150, {
+        min: 100,
+        max: 1000,
+    }),
+    // TTL de seguridad: filas que dejaron de refrescarse se borran solas.
+    // Mantener >= serveTtlMinutes (48 h por defecto) para no vaciar feeds vivos.
+    feedTtlHours: num(process.env.MATCH_FEED_TTL_HOURS, 48, {
+        min: 1,
+        max: 720,
+    }),
 };
 
 export default MATCHING;

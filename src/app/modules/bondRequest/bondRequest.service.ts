@@ -13,7 +13,17 @@ import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import { IBondRequest } from './bondRequest.interface';
 import BondRequest from './bondRequest.model';
 import BondMatch from '../bondMatch/bondMatch.model';
+import BondMatchFeed from '../bondMatch/bondMatchFeed.model';
 import { IMatchScoreParts } from '../bondMatch/bondMatch.interface';
+import { topMatchKeys } from './matching.feed';
+import {
+    bondMatchFeedRowsScanned,
+    bondMatchServeDuration,
+    bondMatchShadowDiffTotal,
+    bondMatchShadowJaccard,
+    bondMatchStatusTotal,
+} from '../../middlewares/metrics';
+import { logger } from '../../shared/logger';
 import { getBlockedIdsFor } from '../userBlock/userBlock.service';
 import { BondLink } from '../bondLink/bondLink.model';
 import { ENUM_BOND_LINK_STATUS } from '../bondLink/bondLink.enum';
@@ -673,6 +683,44 @@ export const calculateMatchScore = (
 
 type MatchType = 'entry' | 'surprise' | 'empty';
 
+/** Comparación shadow feed-vs-legacy. Se muestrea y corre después de servir:
+ *  el camino elegido nunca espera por ella. Mide solapamiento del top-N. */
+const shadowCompareMatches = async (
+    bondRequestId: string,
+    served: any[],
+    servedMode: 'feed' | 'legacy'
+): Promise<void> => {
+    const other =
+        servedMode === 'feed'
+            ? await BondMatch.find({ bonds: bondRequestId })
+                  .select('bonds score')
+                  .sort({ size: 1, score: -1, _id: 1 })
+                  .lean()
+            : await BondMatchFeed.find({ bond: bondRequestId })
+                  .sort({ score: -1, _id: 1 })
+                  .limit(MATCHING.feedScanLimit)
+                  .lean();
+
+    const servedSet = new Set(topMatchKeys(served, MATCHING.maxResults));
+    const otherSet = new Set(topMatchKeys(other as any[], MATCHING.maxResults));
+    let inter = 0;
+    for (const k of servedSet) if (otherSet.has(k)) inter++;
+    const union = servedSet.size + otherSet.size - inter;
+    const jaccard = union === 0 ? 1 : inter / union;
+
+    bondMatchShadowJaccard.observe(jaccard);
+    if (jaccard < 0.99) {
+        bondMatchShadowDiffTotal.inc({ result: 'diff' });
+        logger.warn(
+            `[matching][shadow] ${bondRequestId} mode=${servedMode} jaccard=${jaccard.toFixed(3)} ` +
+                `onlyServed=${[...servedSet].filter((k) => !otherSet.has(k)).length} ` +
+                `onlyOther=${[...otherSet].filter((k) => !servedSet.has(k)).length}`
+        );
+    } else {
+        bondMatchShadowDiffTotal.inc({ result: 'same' });
+    }
+};
+
 export const getMatchingBondRequest = async (
     userId: string,
     bondRequestId: string,
@@ -748,20 +796,35 @@ export const getMatchingBondRequest = async (
         await recalcularVinculosVivos(userId);
     }
 
-    // Matches precomputados (BondMatch). La petición es una simple LECTURA: el
-    // robot (BullMQ / inline) mantiene la cache caliente en segundo plano.
+    // Matches precomputados. La petición es una simple LECTURA: el robot
+    // (BullMQ / inline) mantiene la cache caliente en segundo plano.
+    //
+    // MODO FEED (MATCH_FEED_READ): lee las N mejores filas del feed DEL BOND,
+    // con el índice { bond: 1, score: -1 }. Es un read acotado: ~400 filas
+    // (~150 KB) en vez del superset de { bonds: id } (miles de docs / ~4 MB).
+    // El resto del pipeline (dedup, bloqueos, fantasmas, ranking, paginado) es
+    // EXACTAMENTE el mismo. MODO LEGACY: se conserva para rollback.
+    const lecturaInicio = Date.now();
+    let cached: any[];
+    if (MATCHING.feedRead) {
+        cached = await BondMatchFeed.find({ bond: bondRequestId })
+            .sort({ score: -1, _id: 1 })
+            .limit(MATCHING.feedScanLimit)
+            // Sin esto el driver trae 101 docs y pide un getMore: con Atlas
+            // remoto son ~400 ms extra de RTT por request.
+            .batchSize(MATCHING.feedScanLimit)
+            .lean();
+        bondMatchFeedRowsScanned.observe(cached.length);
+    } else {
+        cached = await BondMatch.find({ bonds: bondRequestId })
+            .sort({ size: 1, score: -1, _id: 1 })
+            .lean();
+    }
+    bondMatchServeDuration.observe(
+        { mode: MATCHING.feedRead ? 'feed' : 'legacy' },
+        (Date.now() - lecturaInicio) / 1000
+    );
     const ttlMs = MATCHING.cacheTtlMinutes * 60 * 1000;
-    // FIX ASIMETRÍA (re-aplicado 3/8, venía del 30/7 y el rollback del 2/8 lo
-    // revirtió): la búsqueda ANN es ASIMÉTRICA — un par válido queda guardado en
-    // BondMatch SOLO del lado que lo descubrió. Con `{ sourceBond }` cada usuario
-    // veía solo los matches que SU bond originó → Facundo veía el par y Emilio no.
-    // Con `{ bonds }` traemos TODOS los matches donde el bond PARTICIPA (lo haya
-    // descubierto quien sea). Es un SUPERSET (solo agrega, nunca saca) y usa el
-    // índice existente `{ bonds: 1 }`. El dedup por conjunto de más abajo colapsa
-    // el mismo trato si vino guardado por ambos lados.
-    const cached = await BondMatch.find({ bonds: bondRequestId })
-        .sort({ size: 1, score: -1, _id: 1 })
-        .lean();
 
     // SEÑAL DE INTERÉS REAL (escala). Que el dueño abra esta pantalla es lo único
     // que dice "este vínculo me importa", y es lo que lo mantiene CALIENTE (TTL de
@@ -844,6 +907,10 @@ export const getMatchingBondRequest = async (
             // Dispara el cómputo en segundo plano (fire-and-forget).
             enqueueRecompute(bondRequestId, MATCH_PRIORITY_USER);
         }
+
+        bondMatchStatusTotal.inc({
+            status: recentlyComputed ? 'ready' : 'computing',
+        });
 
         return {
             // 'ready' = cómputo terminado (aquí, con cero matches);
@@ -1178,6 +1245,20 @@ export const getMatchingBondRequest = async (
             },
         };
     });
+
+    // Shadow muestreado: compara feed con legacy DESPUÉS de servir. Nunca
+    // afecta la respuesta ni la espera del usuario.
+    if (MATCHING.feedShadow && Math.random() < MATCHING.feedShadowSample) {
+        void shadowCompareMatches(
+            bondRequestId,
+            cached,
+            MATCHING.feedRead ? 'feed' : 'legacy'
+        ).catch((e) =>
+            logger.warn(`[matching][shadow] fallo: ${(e as Error)?.message}`)
+        );
+    }
+
+    bondMatchStatusTotal.inc({ status: 'ready' });
 
     return {
         // Cache fresca servida: cómputo listo.
