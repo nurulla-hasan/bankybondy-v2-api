@@ -108,6 +108,31 @@ const NormalUserSchema = new Schema<INormalUser>(
             type: Number,
             default: 0,
         },
+        // Checkout iniciado y todavía no pagado. Se reutiliza su URL mientras siga
+        // fresco (ver subscriptionCheckout.ts) para que dos pestañas no generen
+        // dos órdenes pagables del mismo plan. `url: ''` = reclamo en curso.
+        pendingSubscriptionCheckout: {
+            plan: {
+                type: String,
+                enum: [
+                    ENUM_SUBSCRIPTION_TYPE.Standard,
+                    ENUM_SUBSCRIPTION_TYPE.Premium,
+                ],
+            },
+            provider: {
+                type: String,
+                enum: ['paypal', 'mercadopago'],
+            },
+            // Sin `default`: un `default` acá haría que TODO documento nuevo
+            // nazca con `pendingSubscriptionCheckout: { url: '' }`, como si
+            // tuviera un checkout en curso.
+            url: {
+                type: String,
+            },
+            createdAt: {
+                type: Date,
+            },
+        },
         // Contador-guardia interno para serializar creaciones concurrentes de
         // vínculos (fix de carrera del bondLimit). Solo se incrementa dentro de la
         // transacción de creación; su valor no significa nada de negocio.

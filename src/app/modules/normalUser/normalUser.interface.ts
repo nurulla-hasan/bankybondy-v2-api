@@ -38,6 +38,13 @@ export interface INormalUser {
     // Último tope (bondLimit) por el que ya se avisó el empujón de suscripción, para
     // no repetir el aviso. Al subir de plan cambia el bondLimit y se vuelve a avisar.
     subscriptionNudgeAt?: number;
+    // Checkout iniciado sin pagar (reutilización de URL / anti-duplicado).
+    pendingSubscriptionCheckout?: {
+        plan?: 'Standard' | 'Premium';
+        provider?: 'paypal' | 'mercadopago';
+        url?: string;
+        createdAt?: Date;
+    };
     // Contador-guardia interno (fix de carrera del bondLimit): se incrementa dentro
     // de la transacción de creación de vínculos para forzar un WriteConflict entre
     // creaciones concurrentes del mismo usuario. No tiene significado de negocio.

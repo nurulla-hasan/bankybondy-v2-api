@@ -34,6 +34,7 @@ import { runInputValidationTests } from '../app/modules/bondRequest/inputValidat
 import { runMatchingScheduleTests } from '../app/modules/bondRequest/matching.schedule.test';
 import { runMatchingFeedTests } from '../app/modules/bondRequest/matching.feed.test';
 import { runSubscriptionPlanTests } from '../app/modules/normalUser/subscriptionPlans.test';
+import { runSubscriptionCheckoutTests } from '../app/modules/normalUser/subscriptionCheckout.test';
 import { runAudioModerationTests } from '../app/modules/audio/audio.moderation.test';
 import { runImageModerationTests } from '../app/helper/moderateImage.test';
 import { runAudioListenTests } from '../app/modules/audio/audio.listen.test';
@@ -102,6 +103,10 @@ const main = async (): Promise<void> => {
         {
             nombre: 'subscriptionPlans (anti-downgrade / pagos)',
             correr: runSubscriptionPlanTests,
+        },
+        {
+            nombre: 'subscriptionCheckout (reuso / reclamo de checkout)',
+            correr: runSubscriptionCheckoutTests,
         },
         { nombre: 'audio.moderation', correr: runAudioModerationTests },
         { nombre: 'moderateImage', correr: runImageModerationTests },

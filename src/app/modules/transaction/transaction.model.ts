@@ -73,6 +73,16 @@ const TransactionSchema = new Schema(
             type: Boolean,
             default: false,
         },
+        // Se cobró pero el plan NO se pudo aplicar (ya tenías uno igual o mayor,
+        // o venía de un checkout viejo). Distingue este caso de "la acreditación
+        // murió a mitad": sin esta marca, un reintento de la pasarela entraba por
+        // el camino `already` y re-aplicaba el plan, sacando el pago de la lista
+        // de reembolsos. `Transaction.find({ type:'Subscription', refundPending:true })`
+        // es la lista de plata a devolver a mano.
+        refundPending: {
+            type: Boolean,
+            default: false,
+        },
     },
     {
         timestamps: true,

@@ -33,6 +33,11 @@ import {
     PLANES,
     type TipoPlan,
 } from './subscriptionPlans';
+import {
+    construirFiltroClaim,
+    esCheckoutReutilizable,
+    normalizarProveedor,
+} from './subscriptionCheckout';
 import { INormalUser } from './normalUser.interface';
 import NormalUser from './normalUser.model';
 import { User } from '../user/user.model';
@@ -121,6 +126,9 @@ const PRIVATE_USER_FIELDS = [
     'dateOfBirth',
     'subscriptionType',
     'bondLimit',
+    // La URL de PayPal/MP lleva embebido el id del usuario (custom_id /
+    // external_reference): no puede viajar en el perfil de otro ni en Personas.
+    'pendingSubscriptionCheckout',
     'bondSeq',
     'digestOptOut',
     'mutedNotificationCategories',
@@ -1424,6 +1432,108 @@ const setSubscriptionByAdmin = async (
     return actualizado;
 };
 
+const crearCheckoutMercadopago = async (
+    userId: string,
+    type: 'Standard' | 'Premium'
+): Promise<string> => {
+    // Ruta MercadoPago (paralela a PayPal). Devuelve la URL de Checkout Pro.
+    //
+    // CON try/catch, igual que la rama de PayPal. Sin esto, cualquier falla del
+    // SDK o de la API de MercadoPago —una preferencia rechazada, un timeout, una
+    // credencial vencida— salía como un 500 "Something went wrong" genérico,
+    // porque no es un `AppError` y no matchea ninguna rama del manejador global.
+    // En la pantalla de pago, y con la otra pasarela mostrando un mensaje
+    // decente. Era una asimetría sin motivo.
+    try {
+        const { url } = await createSubscriptionPreference(userId, type);
+        return url;
+    } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('MercadoPago Preference Error:', error);
+        // Si ya es un AppError (p. ej. "no se pudo obtener la cotización"), se
+        // respeta: ese mensaje es más útil que uno genérico.
+        if (error instanceof AppError) throw error;
+        throw new AppError(
+            httpStatus.INTERNAL_SERVER_ERROR,
+            'No se pudo iniciar el pago con MercadoPago. Probá de nuevo en un momento.'
+        );
+    }
+};
+
+const crearCheckoutPaypal = async (
+    userId: string,
+    type: 'Standard' | 'Premium'
+): Promise<string> => {
+    // EL PRECIO SALE DE `subscriptionPlans`, NO DE UN LITERAL ACÁ.
+    //
+    // Antes esto decía `if (Standard) 10 else 25`, y `creditPayment` tenía su
+    // PROPIO mapa 10→Standard / 25→Premium para acreditar POR MONTO. Los dos
+    // tenían que coincidir exacto: cambiar el precio acá y olvidarse del otro
+    // significa **que se cobra y no se acredita** (la acreditación devuelve
+    // `unexpected amount`, la persona paga y no recibe nada, y hace falta tocar
+    // la base a mano). Ahora las dos puntas leen el mismo número.
+    //
+    // El `else` implícito tampoco estaba bien: cualquier tipo distinto de
+    // Standard cobraba 25. Hoy zod ya acota `type` al enum, pero la guarda
+    // explícita no depende de que esa validación siga estando.
+    if (PLANES[type].usdPaypal <= 0) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'Invalid subscription plan');
+    }
+    const totalAmount = PLANES[type].usdPaypal;
+
+    let response;
+    try {
+        const request = new paypal.orders.OrdersCreateRequest();
+        request.prefer('return=representation');
+        request.requestBody({
+            intent: 'CAPTURE',
+            purchase_units: [
+                {
+                    amount: {
+                        currency_code: 'USD',
+                        value: totalAmount.toFixed(2),
+                    },
+                    description: `Payment for subscription: ${type}`,
+                    custom_id: userId,
+                    reference_id: ENUM_PAYMENT_PURPOSE.SUBSCRIPTION,
+                },
+            ],
+            application_context: {
+                // `brand_name` es lo que PayPal le muestra EN LA PANTALLA DE PAGO
+                // a la persona que está por pagar. Decía, literal, "Your Business
+                // Name": el placeholder de la plantilla, vivo en producción, en la
+                // única pantalla donde alguien entrega plata.
+                brand_name: 'Bankybondy',
+                landing_page: 'LOGIN',
+                user_action: 'PAY_NOW',
+                return_url: `${config.paypal.payment_capture_url}`,
+                cancel_url: `${config.paypal.donation_cancel_url}`,
+            },
+        });
+
+        response = await paypalClient.execute(request);
+    } catch (error) {
+        console.error('PayPal Payment Error:', error);
+        throw new AppError(
+            httpStatus.INTERNAL_SERVER_ERROR,
+            'Failed to create PayPal order'
+        );
+    }
+
+    const approvalUrl = response.result.links.find(
+        (link: any) => link.rel === 'approve'
+    )?.href;
+
+    if (!approvalUrl) {
+        throw new AppError(
+            httpStatus.INTERNAL_SERVER_ERROR,
+            'PayPal payment creation failed: No approval URL found'
+        );
+    }
+
+    return approvalUrl;
+};
+
 const purchaseSubscription = async (
     profileId: string,
     type: string,
@@ -1432,6 +1542,12 @@ const purchaseSubscription = async (
     const user = await NormalUser.findById(profileId);
     if (!user) {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
+    }
+
+    // Tipo válido ANTES de reclamar el checkout: un tipo inválido no debe dejar
+    // un reclamo pendiente ni llegar a `nivelDe` (que lo trataría como Free).
+    if (!esTipoPlan(type) || PLANES[type].nivel === 0) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'Invalid subscription plan');
     }
 
     /* ⚠️ NO COBRAR LO QUE NO SE PUEDE ENTREGAR (panel del 11/9).
@@ -1465,97 +1581,104 @@ const purchaseSubscription = async (
         );
     }
 
-    // Ruta MercadoPago (paralela a PayPal). Devuelve la URL de Checkout Pro.
-    if (provider === 'mercadopago') {
-        // CON try/catch, igual que la rama de PayPal de más abajo. Sin esto,
-        // cualquier falla del SDK o de la API de MercadoPago —una preferencia
-        // rechazada, un timeout, una credencial vencida— salía como un 500
-        // "Something went wrong" genérico, porque no es un `AppError` y no matchea
-        // ninguna rama del manejador global. En la pantalla de pago, y con la otra
-        // pasarela mostrando un mensaje decente. Era una asimetría sin motivo.
-        try {
-            return await createSubscriptionPreference(
-                user._id.toString(),
-                type as 'Standard' | 'Premium'
-            );
-        } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error('MercadoPago Preference Error:', error);
-            // Si ya es un AppError (p. ej. "no se pudo obtener la cotización"),
-            // se respeta: ese mensaje es más útil que uno genérico.
-            if (error instanceof AppError) throw error;
-            throw new AppError(
-                httpStatus.INTERNAL_SERVER_ERROR,
-                'No se pudo iniciar el pago con MercadoPago. Probá de nuevo en un momento.'
-            );
-        }
+    const proveedor = normalizarProveedor(provider);
+    const ahora = Date.now();
+
+    // Checkout vigente: devolver la MISMA URL en vez de crear otra orden. Es la
+    // diferencia entre un doble clic y una segunda orden pagable.
+    if (
+        esCheckoutReutilizable(
+            user.pendingSubscriptionCheckout,
+            type,
+            proveedor,
+            ahora
+        )
+    ) {
+        return { url: user.pendingSubscriptionCheckout?.url as string };
     }
 
-    // EL PRECIO SALE DE `subscriptionPlans`, NO DE UN LITERAL ACÁ.
-    //
-    // Antes esto decía `if (Standard) 10 else 25`, y `creditPayment` tenía su
-    // PROPIO mapa 10→Standard / 25→Premium para acreditar POR MONTO. Los dos
-    // tenían que coincidir exacto: cambiar el precio acá y olvidarse del otro
-    // significa **que se cobra y no se acredita** (la acreditación devuelve
-    // `unexpected amount`, la persona paga y no recibe nada, y hace falta tocar
-    // la base a mano). Ahora las dos puntas leen el mismo número.
-    //
-    // El `else` implícito tampoco estaba bien: cualquier tipo distinto de
-    // Standard cobraba 25. Hoy zod ya acota `type` al enum, pero la guarda
-    // explícita no depende de que esa validación siga estando.
-    if (!esTipoPlan(type) || PLANES[type].usdPaypal <= 0) {
-        throw new AppError(httpStatus.BAD_REQUEST, 'Invalid subscription plan');
+    // Reclamo ATÓMICO antes de crear la orden. Si otra request ya tiene un
+    // checkout fresco del mismo plan+proveedor, el filtro no matchea y no se
+    // crea una segunda URL. `url: ''` marca "creando"; se libera sola a los 30 s
+    // (ver subscriptionCheckout.ts).
+    const claim = await NormalUser.findOneAndUpdate(
+        { _id: profileId, ...construirFiltroClaim(type, proveedor, ahora) },
+        {
+            $set: {
+                pendingSubscriptionCheckout: {
+                    plan: type,
+                    provider: proveedor,
+                    url: '',
+                    createdAt: new Date(ahora),
+                },
+            },
+        },
+        { new: true }
+    ).select('pendingSubscriptionCheckout');
+
+    if (!claim) {
+        // Perdimos el reclamo: si la otra request ya escribió la URL, es la misma
+        // que este request iba a crear. Si todavía está creando, no se abre una
+        // segunda orden: 409 y el front muestra un mensaje propio.
+        const actual = await NormalUser.findById(profileId)
+            .select('pendingSubscriptionCheckout')
+            .lean();
+        if (
+            esCheckoutReutilizable(
+                actual?.pendingSubscriptionCheckout,
+                type,
+                proveedor,
+                Date.now()
+            )
+        ) {
+            return {
+                url: actual?.pendingSubscriptionCheckout?.url as string,
+            };
+        }
+        throw new AppError(
+            httpStatus.CONFLICT,
+            'A checkout is already in progress.',
+            'CHECKOUT_IN_PROGRESS'
+        );
     }
-    const totalAmount = PLANES[type].usdPaypal;
+
+    const claimCreatedAt =
+        claim.pendingSubscriptionCheckout?.createdAt ?? new Date(ahora);
+    const filtroReclamo = {
+        _id: profileId,
+        'pendingSubscriptionCheckout.plan': type,
+        'pendingSubscriptionCheckout.provider': proveedor,
+        'pendingSubscriptionCheckout.createdAt': claimCreatedAt,
+    };
 
     try {
-        const request = new paypal.orders.OrdersCreateRequest();
-        request.prefer('return=representation');
-        request.requestBody({
-            intent: 'CAPTURE',
-            purchase_units: [
-                {
-                    amount: {
-                        currency_code: 'USD',
-                        value: totalAmount.toFixed(2),
-                    },
-                    description: `Payment for subscription: ${type}`,
-                    custom_id: user._id.toString(),
-                    reference_id: ENUM_PAYMENT_PURPOSE.SUBSCRIPTION,
-                },
-            ],
-            application_context: {
-                // `brand_name` es lo que PayPal le muestra EN LA PANTALLA DE PAGO
-                // a la persona que está por pagar. Decía, literal, "Your Business
-                // Name": el placeholder de la plantilla, vivo en producción, en la
-                // única pantalla donde alguien entrega plata.
-                brand_name: 'Bankybondy',
-                landing_page: 'LOGIN',
-                user_action: 'PAY_NOW',
-                return_url: `${config.paypal.payment_capture_url}`,
-                cancel_url: `${config.paypal.donation_cancel_url}`,
-            },
+        const url =
+            proveedor === 'mercadopago'
+                ? await crearCheckoutMercadopago(
+                      user._id.toString(),
+                      type as 'Standard' | 'Premium'
+                  )
+                : await crearCheckoutPaypal(
+                      user._id.toString(),
+                      type as 'Standard' | 'Premium'
+                  );
+
+        // Guardado condicionado al reclamo que hicimos: si otro request tomó el
+        // documento (vencido / otro plan), no se pisa su URL.
+        await NormalUser.updateOne(filtroReclamo, {
+            $set: { 'pendingSubscriptionCheckout.url': url },
         });
-
-        const response = await paypalClient.execute(request);
-        const approvalUrl = response.result.links.find(
-            (link: any) => link.rel === 'approve'
-        )?.href;
-
-        if (!approvalUrl) {
-            throw new AppError(
-                httpStatus.INTERNAL_SERVER_ERROR,
-                'PayPal payment creation failed: No approval URL found'
-            );
-        }
-
-        return { url: approvalUrl };
+        return { url };
     } catch (error) {
-        console.error('PayPal Payment Error:', error);
-        throw new AppError(
-            httpStatus.INTERNAL_SERVER_ERROR,
-            'Failed to create PayPal order'
-        );
+        // Liberar el reclamo para reintentar sin esperar los 30 s.
+        try {
+            await NormalUser.updateOne(filtroReclamo, {
+                $unset: { pendingSubscriptionCheckout: '' },
+            });
+        } catch {
+            // best-effort: el reclamo también vence solo a los 30 s
+        }
+        throw error;
     }
 };
 
