@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "outDir": "./dist-tools", "noEmit": false },
+  "include": [
+    "src/scripts/repairBondLegacyState.ts",
+    "src/scripts/backfillBondIdentity.ts",
+    "src/scripts/bondReferenceIndex.ts"
+  ],
+  "exclude": ["node_modules", "dist", "dist-tools", "**/*.test.ts", "**/*.integration.ts"]
+}

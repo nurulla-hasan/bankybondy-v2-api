@@ -39,6 +39,11 @@ import { runAudioModerationTests } from '../app/modules/audio/audio.moderation.t
 import { runImageModerationTests } from '../app/helper/moderateImage.test';
 import { runAudioListenTests } from '../app/modules/audio/audio.listen.test';
 import { runTrendingTests } from '../app/modules/audio/audio.trending.test';
+import { runBondIdentityTests } from '../app/modules/bondRequest/bondIdentity.test';
+import { runBondLinkLifecycleTests } from '../app/modules/bondLink/bondLink.lifecycle.test';
+import { runBondMaintenanceTests } from '../app/modules/bondRequest/bondMaintenance.test';
+import { runBondMaintenanceExecutionTests } from '../app/modules/bondRequest/bondMaintenance.execution.test';
+import { runBondReconciliationTests, runBondReconciliationExecutionTests } from '../app/modules/bondRequest/bondMaintenance.reconcile.test';
 
 /* eslint-disable no-console */
 
@@ -100,6 +105,12 @@ const main = async (): Promise<void> => {
         { nombre: 'sessionCodes (deslogueo)', correr: runSessionCodesTests },
         { nombre: 'QueryBuilder (sort/fields/paginate)', correr: runQueryBuilderTests },
         { nombre: 'inputValidation', correr: runInputValidationTests },
+        { nombre: 'bond identity and response contracts', correr: runBondIdentityTests },
+        { nombre: 'bond terminal lifecycle', correr: runBondLinkLifecycleTests },
+        { nombre: 'bond maintenance projection', correr: runBondMaintenanceTests },
+        { nombre: 'bond maintenance execution', correr: runBondMaintenanceExecutionTests },
+        { nombre: 'bond reconciliation', correr: runBondReconciliationTests },
+        { nombre: 'bond reconciliation execution', correr: runBondReconciliationExecutionTests },
         {
             nombre: 'subscriptionPlans (anti-downgrade / pagos)',
             correr: runSubscriptionPlanTests,

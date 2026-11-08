@@ -1,7 +1,11 @@
 import httpStatus from 'http-status';
 import catchAsync from '../../utilities/catchasync';
-import sendResponse from '../../utilities/sendResponse';
+import originalSendResponse from '../../utilities/sendResponse';
 import bondLinkServices from './bondLink.service';
+import { publicBondData } from '../bondRequest/bondIdentity';
+
+const sendResponse: typeof originalSendResponse = (res, payload) =>
+    originalSendResponse(res, { ...payload, data: publicBondData(payload.data) });
 
 const createBondLink = catchAsync(async (req, res) => {
     // Anti-IDOR: el servicio verifica que quien llama (req.user.profileId) sea

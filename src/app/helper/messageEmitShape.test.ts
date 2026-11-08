@@ -29,7 +29,7 @@ const SENDER_ID = '64b00000000000000000000b';
 // documento que recibe).
 const fakeDoc = (
     fields: Record<string, any>,
-    captured?: { options: any }
+    captured?: { options?: any }
 ): any => ({
     ...fields,
     toObject: (options: any) => {
@@ -122,7 +122,7 @@ const cases: Case[] = [
 
     ['se le pide a mongoose la versión SIN clave de versión',
         (() => {
-            const cap: { options: any } = {};
+            const cap: { options?: any } = {};
             shapeSentMessage(fakeDoc(SENT_DOC, cap));
             return cap.options?.versionKey === false;
         })()],

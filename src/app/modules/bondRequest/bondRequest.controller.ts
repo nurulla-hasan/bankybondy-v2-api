@@ -1,7 +1,11 @@
 import httpStatus from 'http-status';
 import catchAsync from '../../utilities/catchasync';
-import sendResponse from '../../utilities/sendResponse';
+import originalSendResponse from '../../utilities/sendResponse';
 import bondRequestService from './bondRequest.service';
+import { publicBondData } from './bondIdentity';
+
+const sendResponse: typeof originalSendResponse = (res, payload) =>
+    originalSendResponse(res, { ...payload, data: publicBondData(payload.data) });
 
 const createBondRequest = catchAsync(async (req, res) => {
     const result = await bondRequestService.createBondRequestIntoDB(

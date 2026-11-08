@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "build:tools": "tsc -p tsconfig.tools.json",
+    "typecheck:all": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "tsx src/scripts/runTests.ts",
+    "test:bonds:integration": "tsx src/scripts/runBondsIntegration.ts",
     "start": "node dist/server.js",
     "seed:bonds": "tsx src/scripts/seedBonds.ts",
     "match-feed:backfill": "tsx src/scripts/backfillMatchFeed.ts",

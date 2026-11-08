@@ -14,6 +14,7 @@ const createBondRequestValidationSchema = z.object({
 
 const updateBondRequestValidationSchema = z.object({
     body: z.object({
+        isPause: z.boolean().optional(),
         // Si se envían, no pueden quedar vacíos (mismo motivo que en create).
         offer: z.string().trim().min(1).optional(),
         want: z.string().trim().min(1).optional(),

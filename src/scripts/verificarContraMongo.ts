@@ -113,7 +113,7 @@ const grupoSemanticaDeAusentes = async () => {
 const grupoSweep = async () => {
     console.log('\n── La consulta del sweep y su índice (el SORT bloqueante)');
     await BondRequest.deleteMany({});
-    await BondRequest.syncIndexes();
+    await BondRequest.createIndexes();
 
     const ahora = Date.now();
     await BondRequest.create([
@@ -430,6 +430,7 @@ const main = async () => {
     const externa = process.env.VERIFY_MONGO_URL;
     let memoria: any = null;
     let url = externa;
+    let expectedDatabase: string | undefined;
 
     if (!url) {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -483,6 +484,7 @@ const main = async () => {
         const nombreBase = (
             (sinEsquema.split('?')[0].split('@').pop() || '').split('/')[1] || ''
         ).toLowerCase();
+        expectedDatabase = nombreBase;
 
         // `test` NO está en la lista, y es deliberado: es la base POR DEFECTO del
         // driver, y con el estilo de URI de este repo (las de ejemplo no traen
@@ -529,7 +531,11 @@ const main = async () => {
         );
     }
 
-    await mongoose.connect(url as string);
+    await mongoose.connect(url as string, { autoIndex: false, autoCreate: false });
+    if (externa && mongoose.connection.db?.databaseName.toLowerCase() !== expectedDatabase) {
+        await mongoose.disconnect();
+        throw new Error('Connected database differs from the approved disposable database');
+    }
     console.log(`Conectado. Versión del server: ${
         (await mongoose.connection.db!.admin().serverStatus()).version
     }`);

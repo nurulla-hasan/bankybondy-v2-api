@@ -6,6 +6,8 @@
  * la caché de matches (BondMatch) ya computada y 3 BondLinks (Ongoing /
  * Completed / Canceled). Pensado para desarrollo: re-ejecutable e idempotente.
  *
+ * Set BONDS_SEED_DATABASE_URL to an explicitly disposable verify/scratch database first.
+ * Production seeding and implicit application-database fallback are prohibited.
  * Uso (desde la raíz del backend):
  *   pnpm seed:bonds                       # crea/repuebla la cuenta demo
  *   pnpm seed:bonds --user yo@email.com   # siembra sobre TU perfil existente
@@ -15,7 +17,6 @@
  * del perfil indicado, así que no toca datos reales.
  */
 import mongoose, { Types } from 'mongoose';
-import config from '../app/config';
 import { ENUM_BOND_REQUEST_STATUS } from '../app/modules/bondRequest/bondRequest.enum';
 import BondRequest from '../app/modules/bondRequest/bondRequest.model';
 import { BondLink } from '../app/modules/bondLink/bondLink.model';
@@ -515,12 +516,22 @@ async function resolveTargetProfile(email: string) {
 async function main() {
     const { targetEmail, cleanOnly } = parseArgs();
 
-    await mongoose.connect(config.database_url as string, {
-        maxPoolSize: 10,
+    const uri = process.env.BONDS_SEED_DATABASE_URL;
+    const database = uri?.replace(/^mongodb(\+srv)?:\/\//, '').split('?')[0].split('@').pop()?.split('/')[1];
+    if (process.env.NODE_ENV === 'production' || !database ||
+        !/^(?:bankybondy[-_])?(?:verify|scratch|descartable|prueba)[-_][a-z0-9_-]+$/i.test(database)) {
+        throw new Error('BONDS_SEED_DATABASE_URL must explicitly name a disposable database; production seeding is prohibited');
+    }
+    await mongoose.connect(uri, {
+        autoIndex: false, autoCreate: false, maxPoolSize: 10,
         serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
     });
-    console.log('[seed:bonds] DB connected');
+    if (mongoose.connection.db?.databaseName !== database) {
+        await mongoose.disconnect();
+        throw new Error('Seed database differs from the approved disposable target');
+    }
+    console.log('[seed:bonds] Disposable DB connected');
 
     const targetProfileId = targetEmail
         ? await resolveTargetProfile(targetEmail)

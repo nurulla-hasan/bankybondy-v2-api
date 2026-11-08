@@ -102,7 +102,7 @@ const esquemaPrueba = new mongoose.Schema({
     receiver: mongoose.Schema.Types.ObjectId,
 });
 // Nombre único para no chocar si otro test registra un modelo.
-const ModeloPrueba =
+const ModeloPrueba: mongoose.Model<any> =
     mongoose.models.__objectIdTestModel ||
     mongoose.model('__objectIdTestModel', esquemaPrueba);
 

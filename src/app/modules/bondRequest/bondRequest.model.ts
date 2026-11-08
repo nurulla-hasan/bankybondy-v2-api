@@ -5,6 +5,7 @@ import {
     ENUM_BOND_REQUEST_STATUS,
 } from './bondRequest.enum';
 import { IBondRequest } from './bondRequest.interface';
+import { canonicalBondText, publicBondData } from './bondIdentity';
 
 const BondRequestSchema = new Schema<IBondRequest>(
     {
@@ -15,6 +16,9 @@ const BondRequestSchema = new Schema<IBondRequest>(
         },
         offer: { type: String, required: true },
         want: { type: String, required: true },
+        integrityRevision: { type: Number, default: 0, select: false },
+        offerKey: { type: String, select: false },
+        wantKey: { type: String, select: false },
         // Ubicación OPCIONAL. Un usuario sin ubicación guardada (o un bond
         // 'online') debe poder crear bonds sin coordenadas. Cuando no hay coords,
         // el servicio NO adjunta este subdocumento (un `location` parcial rompería
@@ -118,8 +122,15 @@ const BondRequestSchema = new Schema<IBondRequest>(
     },
     {
         timestamps: true,
+        toJSON: { transform: (_doc, ret) => publicBondData(ret) },
+        toObject: { transform: (_doc, ret) => publicBondData(ret) },
     }
 );
+
+BondRequestSchema.pre('validate', function () {
+    if (typeof this.offer === 'string') this.offerKey = canonicalBondText(this.offer);
+    if (typeof this.want === 'string') this.wantKey = canonicalBondText(this.want);
+});
 
 BondRequestSchema.index({ status: 1 });
 BondRequestSchema.index({ offer: 1 });

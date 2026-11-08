@@ -5,11 +5,12 @@ import mongoose from 'mongoose';
 import QueryBuilder from '../../builder/QueryBuilder';
 import AppError from '../../error/appError';
 import { invalidateAndRefresh } from '../bondRequest/matching.robot';
-import { ENUM_CONVERSATION_TYPE } from '../conversation/conversation.enum';
 import Conversation from '../conversation/conversation.model';
 import { ENUM_BOND_LINK_STATUS } from './bondLink.enum';
 import { IBondLink } from './bondLink.interface';
 import { BondLink } from './bondLink.model';
+import { createBondLinkLifecycle } from './bondLink.lifecycle';
+import { createBondIntegrity } from '../bondRequest/bondIntegrity';
 import sendNotification from '../../helper/sendNotification';
 import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
 import BondRequest from '../bondRequest/bondRequest.model';
@@ -211,50 +212,12 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
     // para que un doble-submit no cree DOS vinculos activos con los mismos bonos.
     const bondsKey = [...uniqueRequestedBonds].sort().join('_');
 
-    const session = await mongoose.startSession();
     let createdBondLinkDoc: any;
-
     try {
-        await session.withTransaction(
-            async () => {
-                // Campos EXPLICITOS (no `...payload`): un vinculo nace SIEMPRE
-                // Ongoing. La validacion permitia `status` en el body, asi que
-                // un cliente podia crear un vinculo ya Completed/Canceled (que
-                // ademas esquivaba el indice parcial). Se ignora ese status.
-                const [bondLink] = await BondLink.create(
-                    [
-                        {
-                            name: payload.name,
-                            participants,
-                            requestedBonds: payload.requestedBonds,
-                            bondsKey,
-                            status: ENUM_BOND_LINK_STATUS.Ongoing,
-                        },
-                    ],
-                    { session }
-                );
-                createdBondLinkDoc = bondLink;
-
-                // Al linkear NO se saca ningun vinculo del pool: un vinculo sigue
-                // vivo y recibiendo propuestas hasta que su dueno lo pause (isPause).
-                // Solo se crea la conversacion del grupo para coordinar el intercambio.
-                await Conversation.create(
-                    [
-                        {
-                            participants,
-                            type: ENUM_CONVERSATION_TYPE.bondLinkGroup,
-                            bondLink: bondLink._id,
-                        },
-                    ],
-                    { session }
-                );
-            },
-            {
-                readConcern: { level: 'local' },
-                writeConcern: { w: 'majority' },
-                readPreference: 'primary',
-            }
-        );
+        createdBondLinkDoc = await createBondIntegrity({
+            bonds: BondRequest, links: BondLink, conversations: Conversation,
+            startSession: () => mongoose.startSession(),
+        }).createLink(payload, callerProfileId);
 
         // Tras el link, refrescamos las cachés de los vínculos involucrados. NO se
         // desactivan (siguen en el pool); solo se recalculan para quedar al día.
@@ -368,8 +331,6 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
             );
         }
         throw err;
-    } finally {
-        session.endSession();
     }
 };
 
@@ -489,228 +450,15 @@ const getSingleBondLink = async (profileId: string, id: string) => {
     };
 };
 
-const markAsCompleteBond = async (profileId: string, bondLinkId: string) => {
-    const bondLink = await BondLink.findById(bondLinkId);
-    // .includes() sobre ObjectId compara por REFERENCIA → siempre daba false,
-    // así que este guard SIEMPRE tiraba "no sos participante" y rompía por
-    // completo el "marcar como completado". Comparo por string.
-    if (
-        !bondLink?.participants.some(
-            (x: any) => x?.toString() === profileId.toString()
-        )
-    ) {
-        throw new AppError(
-            httpStatus.NOT_FOUND,
-            'You are not participant of that bond'
-        );
-    }
-
-    // Un trueque NO CONCRETADO (Canceled) no se puede completar. Sin este guard,
-    // marcar completado sobre un Canceled agregaba al usuario a markAsCompletedBy
-    // y (frágil) el filtro `status != Completed` de más abajo podía transicionar
-    // Canceled→Completed.
-    if (bondLink.status === ENUM_BOND_LINK_STATUS.Canceled) {
-        throw new AppError(
-            httpStatus.BAD_REQUEST,
-            'Este trueque no se concretó; no se puede completar.'
-        );
-    }
-
-    // Si el vínculo YA está completado, no re-procesar: el $addToSet de abajo
-    // sería no-op y se volvería a cumplir el umbral → se re-dispararía
-    // TRADE_COMPLETED a todos (spam + infla el digest + re-sube el badge). Se
-    // dispara SOLO en la transición a completado.
-    if (bondLink.status === ENUM_BOND_LINK_STATUS.Completed) {
-        return bondLink;
-    }
-
-    const result = await BondLink.findOneAndUpdate(
-        {
-            _id: bondLinkId,
-            participants: new mongoose.Types.ObjectId(profileId),
-        },
-        {
-            $addToSet: {
-                markAsCompletedBy: new mongoose.Types.ObjectId(profileId),
-            },
-        },
-        { new: true }
-    );
-
-    if (!result) {
-        throw new AppError(
-            httpStatus.BAD_REQUEST,
-            'Maybe you are not participant of that bond , if you please contact with admin'
-        );
-    }
-    if (result?.markAsCompletedBy.length === bondLink.participants.length) {
-        // Transición ATÓMICA: el cambio de estado a Completed es el gate que
-        // decide quién notifica. Antes el guard era una lectura previa + un
-        // findByIdAndUpdate separado → con doble-tap concurrente (o los dos
-        // últimos marcando a la vez) ambos requests veían el umbral cumplido y
-        // re-disparaban TRADE_COMPLETED a todos. Ahora se transiciona con filtro
-        // `status != Completed`: MongoDB serializa la escritura sobre el doc, así
-        // que UN solo request obtiene un doc no-null (el que ganó la transición)
-        // y es el único que notifica. `findOneAndUpdate` sin `new:true` devuelve
-        // el doc PREVIO (null si el filtro ya no matchea = otro ganó).
-        const justCompleted = await BondLink.findOneAndUpdate(
-            {
-                _id: bondLinkId,
-                status: { $ne: ENUM_BOND_LINK_STATUS.Completed },
-            },
-            { status: ENUM_BOND_LINK_STATUS.Completed }
-        );
-
-        // `result` se leyó ANTES de esta transición, así que todavía trae
-        // status:'Ongoing' aunque el trueque acabe de cerrarse. Devolverlo así
-        // dejaba al front sin forma de distinguir "lo marqué yo y falta el otro"
-        // de "se cerró el círculo": abría el modal de calificación siempre, y al
-        // primero que marcaba el backend le rechazaba la reseña (solo se puede
-        // calificar un vínculo Completed). Se refleja el estado REAL.
-        // Vale en las dos ramas: si `justCompleted` es null es porque OTRO request
-        // ganó la transición, pero el vínculo quedó completado igual.
-        result.status = ENUM_BOND_LINK_STATUS.Completed;
-
-        if (justCompleted) {
-            // RATING EN SUSPENSO → APLICAR EN LOTE: el círculo cerró (todos
-            // completaron), así que todas las calificaciones de este trueque pasan a
-            // `applied:true` y se recalcula la reputación de cada calificado. Un
-            // trueque inconcluso NUNCA llega acá → sus ratings quedan en suspenso
-            // (no generan reputación). Best-effort: si el proceso muere a mitad, el
-            // sweep de reconciliación (reconcileStrandedRatings, en el worker) re-aplica
-            // las reseñas de trueques ya Completed que quedaron en applied:false.
-            try {
-                await BondRating.updateMany(
-                    { bondLink: bondLinkId, applied: { $ne: true } },
-                    { $set: { applied: true } }
-                );
-                const ratedIds: any[] = await BondRating.distinct('rated', {
-                    bondLink: bondLinkId,
-                });
-                await Promise.all(
-                    ratedIds.map((rid) =>
-                        recomputeReputation(rid.toString()).catch(
-                            () => undefined
-                        )
-                    )
-                );
-            } catch {
-                /* best-effort */
-            }
-
-            // Se cerró el círculo → avisar a TODOS los participantes. Best-effort.
-            (bondLink.participants ?? []).forEach((p: any) => {
-                sendNotification({
-                    title: 'Se cerró el círculo',
-                    message: '¡El trueque se completó! ¿Cómo estuvo?',
-                    receiver: p.toString(),
-                    type: ENUM_NOTIFICATION_TYPE.TRADE_COMPLETED,
-                    redirectId: bondLinkId.toString(),
-                }).catch(() => undefined);
-            });
-        }
-    }
-    return result;
-};
-
-/** Rechazar un trueque → lo da por NO CONCRETADO (status Canceled) para TODOS.
- *  El que rechaza SALE del chat (soft-hide por `hiddenBy`: no se borra, los demás
- *  lo conservan como historial y pueden seguir hablando). Opcionalmente bloquea a
- *  participantes elegidos — SIEMPRE excluyendo al propio usuario (nadie se bloquea
- *  a sí mismo) y sólo a participantes de ESTE trueque (no sirve para bloquear a
- *  terceros). Cancelar NO toca los vínculos de nadie: siguen activos y matcheando,
- *  se puede re-proponer en otra oportunidad. */
-const rejectBondLink = async (
-    profileId: string,
-    bondLinkId: string,
-    blockUserIds: string[] = []
-) => {
-    const bondLink = await BondLink.findById(bondLinkId);
-    // Guarda de participante (comparación por string: .includes sobre ObjectId
-    // compara por referencia y nunca matchea).
-    if (
-        !bondLink?.participants.some(
-            (x: any) => x?.toString() === profileId.toString()
-        )
-    ) {
-        throw new AppError(
-            httpStatus.NOT_FOUND,
-            'You are not participant of that bond'
-        );
-    }
-
-    // No se puede rechazar un trueque ya COMPLETADO (el intercambio ya ocurrió):
-    // evita ocultar/bloquear sobre un cierre real y devolver un status mentiroso.
-    if (bondLink.status === ENUM_BOND_LINK_STATUS.Completed) {
-        throw new AppError(
-            httpStatus.BAD_REQUEST,
-            'No se puede rechazar un trueque ya completado.'
-        );
-    }
-
-    // Transición ATÓMICA a Canceled: sólo el request que la gana notifica a los
-    // demás (evita spam si dos rechazan casi a la vez). Idempotente: si ya estaba
-    // Canceled, `justCanceled` es null y no re-notifica. El status devuelto es
-    // veraz: acá el estado sólo puede ser Ongoing (→Canceled) o ya Canceled.
-    const justCanceled = await BondLink.findOneAndUpdate(
-        { _id: bondLinkId, status: ENUM_BOND_LINK_STATUS.Ongoing },
-        { status: ENUM_BOND_LINK_STATUS.Canceled }
-    );
-
-    // "Sale del chat" = salida REAL: se lo saca de `participants` (así los guards de
-    // participante en getMessages/getMediaFiles lo bloquean → no puede seguir leyendo
-    // el historial/media por REST, ni ver los mensajes que los demás manden después),
-    // y se agrega a `hiddenBy` (defensa + coherencia). Los demás quedan como
-    // participantes y conservan el chat. El ocultar VOLUNTARIO (declutter) sigue
-    // usando SOLO `hiddenBy` (queda leíble a propósito). Idempotente.
-    await Conversation.updateOne(
-        { bondLink: bondLink._id },
-        {
-            $pull: { participants: new mongoose.Types.ObjectId(profileId) },
-            $addToSet: { hiddenBy: new mongoose.Types.ObjectId(profileId) },
-        }
-    );
-
-    // Bloqueos opcionales: SIEMPRE excluyendo al propio usuario y validando que el
-    // objetivo sea participante de ESTE trueque. blockUser ya es idempotente y ya
-    // rechaza el self-block (doble red). Best-effort: un bloqueo que falle no debe
-    // tumbar el rechazo.
-    const participantIds = new Set(
-        (bondLink.participants ?? []).map((p: any) => p.toString())
-    );
-    const toBlock = [
-        ...new Set((blockUserIds ?? []).map((x) => x.toString())),
-    ].filter((id) => id !== profileId.toString() && participantIds.has(id));
-    for (const blockedId of toBlock) {
-        // eslint-disable-next-line no-await-in-loop
-        await userBlockServices
-            .blockUser(profileId, blockedId)
-            .catch(() => undefined);
-    }
-
-    // Aviso a los DEMÁS: el trueque no se concretó (sus vínculos siguen vivos).
-    // Best-effort; sólo el que ganó la transición notifica.
-    if (justCanceled) {
-        (bondLink.participants ?? [])
-            .filter((p: any) => p.toString() !== profileId.toString())
-            .forEach((p: any) => {
-                sendNotification({
-                    title: 'Un trueque no se concretó',
-                    message:
-                        'Se rechazó la propuesta. Tus vínculos siguen activos y buscando nuevos trueques.',
-                    receiver: p.toString(),
-                    type: ENUM_NOTIFICATION_TYPE.GENERAL,
-                    redirectId: bondLinkId.toString(),
-                }).catch(() => undefined);
-            });
-    }
-
-    return {
-        status: ENUM_BOND_LINK_STATUS.Canceled,
-        blocked: toBlock,
-        leftChat: true,
-    };
-};
+const { markAsCompleteBond, rejectBondLink } = createBondLinkLifecycle({
+    BondLink,
+    Conversation,
+    BondRating,
+    startSession: () => mongoose.startSession(),
+    sendNotification,
+    recomputeReputation,
+    blockUser: (profileId, blockedId) => userBlockServices.blockUser(profileId, blockedId),
+});
 
 const BondLinkServices = {
     getMyBondLinks,

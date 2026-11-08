@@ -34,6 +34,12 @@ const cases: Case[] = [
     // update: opcionales, pero si vienen no pueden ser vacíos
     ['update offer vacío → rechazado', update({ offer: '' }) === false],
     ['update sin offer/want → ok (opcionales)', update({}) === true],
+    ['pause true is accepted', update({ isPause: true }) === true],
+    ['pause false is accepted', update({ isPause: false }) === true],
+    ...[null, 'false', 0, [], {}].map((isPause): Case => [
+        `non-boolean pause ${JSON.stringify(isPause)} is rejected`,
+        update({ isPause }) === false,
+    ]),
 ];
 
 export const runInputValidationTests = (): { pass: number; fail: number } => {

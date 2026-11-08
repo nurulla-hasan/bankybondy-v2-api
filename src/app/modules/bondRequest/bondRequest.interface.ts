@@ -2,6 +2,9 @@ import { Types } from 'mongoose';
 import { BondModality, ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 
 export interface IBondRequest {
+    integrityRevision?: number;
+    offerKey?: string;
+    wantKey?: string;
     user: Types.ObjectId;
     offer: string;
     want: string;

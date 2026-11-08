@@ -26,7 +26,6 @@ import {
 import { logger } from '../../shared/logger';
 import { getBlockedIdsFor } from '../userBlock/userBlock.service';
 import { BondLink } from '../bondLink/bondLink.model';
-import { ENUM_BOND_LINK_STATUS } from '../bondLink/bondLink.enum';
 import { agendaVencida } from './matching.schedule';
 import { MATCHING } from './matching.config';
 import { COLOR_PALETTE, specialEntryColor, isEmptyToken } from './matching.colors';
@@ -41,6 +40,9 @@ import sendNotification from '../../helper/sendNotification';
 import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
 import { ENUM_SUBSCRIPTION_TYPE } from '../normalUser/normalUser.enum';
 import { recalcularVinculosVivos } from '../normalUser/vinculosVivos';
+import { hasBondIdentity } from './bondIdentity';
+import { createBondIntegrity } from './bondIntegrity';
+import Conversation from '../conversation/conversation.model';
 
 // Mensaje único para el conflicto de vínculo duplicado. Se reutiliza tanto en
 // el chequeo previo (case-insensitive + trim) como en el catch del E11000
@@ -123,13 +125,12 @@ const createBondRequestIntoDB = async (
         );
     }
 
-    // Censura + embeddings + chequeo de duplicados, TODO en paralelo (antes eran
-    // dos tandas de OpenAI en serie: primero censura, LUEGO embeddings). La censura
-    // sigue siendo bloqueante: si algo no pasa, tiramos error y los embeddings ya
-    // calculados se descartan (el usuario NUNCA ve "creado"). Esto baja el peor
-    // caso a ~1 tanda de round-trips a OpenAI -> crear el vínculo casi a la mitad.
     const offerTrimmed = (payload.offer ?? '').trim();
     const wantTrimmed = (payload.want ?? '').trim();
+    // Both canonical and legacy identity checks finish before paid API calls.
+    if (await hasBondIdentity(BondRequest, userId, offerTrimmed, wantTrimmed)) {
+        throw new AppError(httpStatus.CONFLICT, DUPLICATE_BOND_MESSAGE);
+    }
     // Censura de los TRES textos visibles (ofrezco/busco/descripción) en UNA sola
     // llamada batcheada: el prompt de intención se paga 1 vez en vez de 3, y son
     // 2 requests a OpenAI por vínculo (1 moderación + 1 intención) en vez de 6.
@@ -137,25 +138,11 @@ const createBondRequestIntoDB = async (
     // agarra frases contextuales tipo "drug dealer"). Veredicto POR CAMPO. La
     // descripción vacía devuelve safe. Bloqueante: si algo no pasa, error y NO se
     // crea nada (los embeddings ya calculados se descartan).
-    const [safety, offerVector, wantVector, existingDuplicate] =
-        await Promise.all([
-            isTextSafeBatch([
-                payload.offer ?? '',
-                payload.want ?? '',
-                payload.description ?? '',
-            ]),
-            generateEmbedding(payload.offer),
-            generateEmbedding(payload.want),
-            BondRequest.findOne({
-                user: userId,
-                status: ENUM_BOND_REQUEST_STATUS.WAITING_FOR_LINK,
-                isLinked: { $ne: true },
-                offer: new RegExp(`^${escapeRegex(offerTrimmed)}$`, 'i'),
-                want: new RegExp(`^${escapeRegex(wantTrimmed)}$`, 'i'),
-            })
-                .select('_id')
-                .lean(),
-        ]);
+    const [safety, offerVector, wantVector] = await Promise.all([
+        isTextSafeBatch([offerTrimmed, wantTrimmed, payload.description ?? '']),
+        generateEmbedding(offerTrimmed),
+        generateEmbedding(wantTrimmed),
+    ]);
     const [offerCheck, wantCheck, descCheck] = safety;
 
     // La censura MANDA: si algo no pasa, error inmediato (embeddings descartados).
@@ -165,9 +152,6 @@ const createBondRequestIntoDB = async (
     assertTextAllowed(offerCheck, 'Offer');
     assertTextAllowed(wantCheck, 'Want');
     assertTextAllowed(descCheck, 'Description');
-    if (existingDuplicate) {
-        throw new AppError(httpStatus.CONFLICT, DUPLICATE_BOND_MESSAGE);
-    }
 
     // Herencia de ubicacion (best-effort): si el payload no trae coordenadas
     // usables y el creador tiene una ubicacion guardada en su perfil, el bond
@@ -233,11 +217,15 @@ const createBondRequestIntoDB = async (
             // `hasActiveBonds: true` va en la MISMA escritura, dentro de la
             // transacción: todo vínculo nace vivo (status WAITING_FOR_LINK,
             // isPause e isLinked en false por default). Ver vinculosVivos.ts.
-            await NormalUser.updateOne(
+            const guardedUser = await NormalUser.updateOne(
                 { _id: userId },
                 { $inc: { bondSeq: 1 }, $set: { hasActiveBonds: true } },
                 { session }
             );
+            if (!guardedUser.matchedCount) throw new AppError(httpStatus.NOT_FOUND, 'User not found');
+            if (await hasBondIdentity(BondRequest, userId, offerTrimmed, wantTrimmed, session)) {
+                throw new AppError(httpStatus.CONFLICT, DUPLICATE_BOND_MESSAGE);
+            }
             // WHITELIST (anti mass-assignment): se arman los campos EXPLÍCITOS
             // que el usuario puede fijar. Antes era `{ ...payload, ... }`, y como
             // `validateRequest` NO recorta el body, un cliente podía inyectar
@@ -250,8 +238,8 @@ const createBondRequestIntoDB = async (
             const [doc] = await BondRequest.create(
                 [
                     {
-                        offer: payload.offer,
-                        want: payload.want,
+                        offer: offerTrimmed,
+                        want: wantTrimmed,
                         description: payload.description,
                         modality: payload.modality,
                         radius: (payload as any).radius,
@@ -557,62 +545,12 @@ const updateBondRequestIntoDB = async (
 };
 
 const deleteBondRequestFromDB = async (userId: string, id: string) => {
-    const bondRequest = await BondRequest.findOne({ user: userId, _id: id });
-    if (!bondRequest)
-        throw new AppError(httpStatus.NOT_FOUND, 'BondRequest not found');
-
-    // Integridad de vínculos: un vínculo (BondLink) referencia sus bonos en
-    // `requestedBonds`. Si se HARD-DELETE un bono que forma parte de un vínculo
-    // EN CURSO, el BondLink queda con una referencia colgada → la UI (que asume
-    // objetos válidos) crasheaba al abrir "Vínculos en curso" y se rompía la
-    // coordinación del intercambio para la contraparte. No se permite borrar un
-    // bono atado a un vínculo Ongoing: primero hay que cancelar/completar el
-    // vínculo.
-    const linkedOngoing = await BondLink.exists({
-        requestedBonds: bondRequest._id,
-        status: ENUM_BOND_LINK_STATUS.Ongoing,
-    });
-    if (linkedOngoing) {
-        throw new AppError(
-            httpStatus.CONFLICT,
-            'No podés borrar un vínculo que forma parte de un vínculo en curso. Cerralo o cancelalo primero.'
-        );
-    }
-
-    // SOFT-DELETE si el bono participó de un vínculo COMPLETADO. Antes se hacía
-    // hard-delete y eso rompía dos cosas: el BondLink quedaba con una referencia
-    // colgada, y la reseña (BondRating) fallaba con "Rated user bond request not
-    // found" -> se perdía reputación que la persona ganó en intercambios reales.
-    // Cambiar de intereses es normal y no debería costarle su historial.
-    // Se marca en vez de borrar: el vínculo completado y su reseña sobreviven,
-    // pero el bono desaparece de los listados y NO consume cupo del bondLimit.
-    //
-    // Solo COMPLETED activa el soft-delete. Un bono cuyo único vínculo fue
-    // CANCELADO no tiene nada que preservar y se borra de verdad; además, al
-    // cancelarse vuelve a estado disponible, y dejarlo marcado lo mantendría
-    // ocupando el índice único parcial {user, offer, want} -> el usuario no
-    // podría recrear un bono idéntico.
-    const linkedCompleted = await BondLink.exists({
-        requestedBonds: bondRequest._id,
-        status: ENUM_BOND_LINK_STATUS.Completed,
-    });
-
-    let result;
-    if (linkedCompleted) {
-        result = await BondRequest.findByIdAndUpdate(
-            id,
-            {
-                // `isLinked`/`isPause` acompañan a `isDeleted` a propósito: son
-                // los campos que ya filtran el matcheo, `myBondRequests` y el
-                // índice único parcial. Marcar los tres deja el bono fuera de
-                // todos esos caminos aunque alguno no mire `isDeleted`.
-                $set: { isDeleted: true, isLinked: true, isPause: true },
-            },
-            { new: true }
-        );
-    } else {
-        result = await BondRequest.findByIdAndDelete(id);
-    }
+    // The shared transaction guard prevents a link from referencing a concurrently deleted bond.
+    // Completed history is soft-deleted; canceled-only/unreferenced bonds retain hard-delete behavior.
+    const result = await createBondIntegrity({
+        bonds: BondRequest, links: BondLink, conversations: Conversation,
+        startSession: () => mongoose.startSession(),
+    }).deleteBond(userId, id);
 
     // REARMA EL EMPUJÓN DE SUSCRIPCIÓN (decisión de Emilio, 11/9).
     //
@@ -752,7 +690,7 @@ export const getMatchingBondRequest = async (
         isDeleted: { $ne: true },
     })
         .select(
-            'offer want offerVector wantVector location radius user modality matchesComputedAt matchesNextAt lastServedAt isPause'
+            'matchesComputedAt matchesNextAt lastServedAt isPause'
         )
         .lean();
 
