@@ -31,6 +31,11 @@ router.get(
     bondRequestController.getMyBondRequests
 );
 router.get(
+    '/quota',
+    auth(USER_ROLE.user),
+    bondRequestController.getBondQuota
+);
+router.get(
     '/get-single-bond-request/:id',
     auth(USER_ROLE.user),
     bondRequestController.getSingleBondRequest

@@ -125,6 +125,16 @@ const getMatchingBondRequest = catchAsync(async (req, res) => {
     });
 });
 
+const getBondQuota = catchAsync(async (req, res) => {
+    const result = await bondRequestService.getBondQuota(req.user.profileId);
+    sendResponse(res, {
+        statusCode: httpStatus.OK,
+        success: true,
+        message: 'Bond quota retrieved successfully',
+        data: result,
+    });
+});
+
 const bondRequestController = {
     createBondRequest,
     getAllBondRequests,
@@ -132,6 +142,7 @@ const bondRequestController = {
     updateBondRequest,
     deleteBondRequest,
     getMyBondRequests,
+    getBondQuota,
     getMatchingBondRequest,
     getBondRequestsByUser,
     getLastBond,

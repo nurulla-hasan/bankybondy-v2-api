@@ -1306,6 +1306,30 @@ const getBondRequestsByUser = async (
     return { bondsPublic, count, bonds, page, limit };
 };
 
+/* Cupo visible del plan: cuántos vínculos ocupa y cuánto le queda.
+ * Usa el MISMO filtro que `createBondRequestIntoDB` (FILTRO_CUPO_VINCULOS), así
+ * que el número mostrado y el chequeo del 403 no pueden divergir. Es una lectura
+ * aparte de `myBondRequests`: esa lista excluye `isLinked`, y un vínculo linkeado
+ * SÍ sigue ocupando cupo (sólo eliminarlo lo libera). */
+const getBondQuota = async (userId: string) => {
+    const [user, used] = await Promise.all([
+        NormalUser.findById(userId).select('bondLimit'),
+        BondRequest.countDocuments({ user: userId, ...FILTRO_CUPO_VINCULOS }),
+    ]);
+
+    if (!user) {
+        throw new AppError(httpStatus.NOT_FOUND, 'User not found');
+    }
+
+    const limit = user.bondLimit ?? 25;
+
+    return {
+        used,
+        limit,
+        remaining: Math.max(0, limit - used),
+    };
+};
+
 const bondRequestService = {
     createBondRequestIntoDB,
     getBondRequestsByUser,
@@ -1314,6 +1338,7 @@ const bondRequestService = {
     updateBondRequestIntoDB,
     deleteBondRequestFromDB,
     myBondRequests,
+    getBondQuota,
     getMatchingBondRequest,
     getLastBond,
 };
