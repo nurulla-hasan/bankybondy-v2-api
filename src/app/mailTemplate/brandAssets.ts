@@ -5,16 +5,26 @@
  *   NO depende de descargas externas (Google Fonts se bloquea en previews y en varios
  *   clientes → cae al fallback). Incrustada renderiza sí o sí. Aun así Gmail/Outlook
  *   ignoran @font-face y caen a una sans limpia; Apple Mail / iOS la muestran.
- * - Logo EXACTO (de Logo.jsx): elipse ancha con borde blanco fino + semáforo
- *   (verde #22B14C · barra amarilla #FFF200 · rojo #ED1C24). CSS/tablas, sin imagen.
- * - Azul de marca real #1f4288 (del --primary oklch del sitio).
+ * - Logo v1 (de Logo.jsx): cápsula oscura con semáforo, misma forma/proporciones.
+ *   Paleta v2: cápsula índigo profundo, borde índigo, puntos cian/índigo/esmeralda.
+ *   Tablas + VML: en Outlook la cápsula se dibuja con v:roundrect y la tabla
+ *   interna queda transparente (clase .bb-capsule). Sin imágenes ni degradados.
+ * - Superficies neutras frías y acentos índigo (paleta v2 del sitio).
  *
  * El bloque @font-face con el base64 es AUTO-GENERADO por scripts/gen-brand-font
  * (lee web/src/app/fonts/poppins-latin-4/700). No editar a mano el base64. */
 
 export const BRAND_FONT =
     "'Poppins','Segoe UI',Roboto,Helvetica,Arial,sans-serif";
-export const BRAND_PRIMARY = '#1f4288';
+
+// Paleta v2 (indigo/cian/esmeralda). El CTA usa indigo-600 por contraste AA.
+export const BRAND_INK = '#0f172a';
+export const BRAND_CAPSULE_BORDER = '#4f46e5';
+export const BRAND_CYAN = '#22d3ee';
+export const BRAND_INDIGO = '#6366f1';
+export const BRAND_EMERALD = '#10b981';
+export const BRAND_ACCENT = '#4f46e5';
+export const BRAND_PRIMARY = BRAND_INDIGO;
 
 // @font-face de Poppins (400 y 700) con la fuente incrustada en base64.
 export const POPPINS_FONTFACE = `        @font-face {
@@ -44,31 +54,37 @@ export const escHtml = (s: unknown): string =>
                 : '&quot;'
     );
 
-// Logo Bankybondy EXACTO: elipse ancha, borde blanco fino, semáforo compacto.
+// Logo v1: misma cápsula/semáforo y proporciones (100×32 escalado ×1.4), con la
+// paleta v2 (índigo/cian/esmeralda). Outlook: v:roundrect dibuja la cápsula y
+// .bb-capsule (head) oculta el fondo de la tabla interna, así quedan sólo los
+// puntos dentro de la forma redondeada.
 export const BRAND_LOGO = `
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto; border:3px solid #ffffff; border-radius:50%; background-color:#1f4288;">
+                            <!--[if mso]>
+                            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="height:45px;v-text-anchor:middle;width:139px;" arcsize="50%" strokecolor="#4f46e5" fillcolor="#12162b">
+                                <w:anchorlock/>
+                                <center>
+                            <![endif]-->
+                            <table role="presentation" class="bb-capsule" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto; background-color:#12162b; border:3px solid #4f46e5; border-radius:100px; padding:14px 11px;">
                                 <tr>
-                                    <td style="padding:22px 48px;">
-                                        <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                                            <tr>
-                                                <td style="width:14px; height:14px; background-color:#22B14C; border-radius:7px; font-size:0; line-height:0; mso-line-height-rule:exactly;">&nbsp;</td>
-                                                <td style="width:14px; font-size:0; line-height:0;">&nbsp;</td>
-                                                <td style="width:64px; height:14px; background-color:#FFF200; border-radius:7px; font-size:0; line-height:0; mso-line-height-rule:exactly;">&nbsp;</td>
-                                                <td style="width:14px; font-size:0; line-height:0;">&nbsp;</td>
-                                                <td style="width:14px; height:14px; background-color:#ED1C24; border-radius:7px; font-size:0; line-height:0; mso-line-height-rule:exactly;">&nbsp;</td>
-                                            </tr>
-                                        </table>
-                                    </td>
+                                    <td style="width:11px; height:11px; background-color:#22d3ee; border-radius:6px; font-size:0; line-height:0; mso-line-height-rule:exactly;">&nbsp;</td>
+                                    <td style="width:11px; font-size:0; line-height:0;">&nbsp;</td>
+                                    <td style="width:67px; height:11px; background-color:#6366f1; border-radius:6px; font-size:0; line-height:0; mso-line-height-rule:exactly;">&nbsp;</td>
+                                    <td style="width:11px; font-size:0; line-height:0;">&nbsp;</td>
+                                    <td style="width:11px; height:11px; background-color:#10b981; border-radius:6px; font-size:0; line-height:0; mso-line-height-rule:exactly;">&nbsp;</td>
                                 </tr>
-                            </table>`;
+                            </table>
+                            <!--[if mso]>
+                                </center>
+                            </v:roundrect>
+                            <![endif]-->`;
 
 // Caja del código de verificación (compartida entre activación y reset).
 export const codeBox = (code: string | number): string => `
                             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                 <tr>
-                                    <td align="center" style="background-color:#eef3fc; border:1px solid #cddaf3; border-radius:14px; padding:24px 16px;">
-                                        <div style="font-family:${BRAND_FONT}; font-weight:400; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#64748b; margin-bottom:10px;">Tu código</div>
-                                        <div style="font-family:${BRAND_FONT}; font-size:42px; line-height:1; letter-spacing:14px; font-weight:700; color:#1f4288; padding-left:14px;">${escHtml(
+                                    <td align="center" style="background-color:#eef2ff; border:1px solid #c7d2fe; border-radius:16px; padding:24px 16px;">
+                                        <div style="font-family:${BRAND_FONT}; font-weight:400; font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#667085; margin-bottom:10px;">Tu código</div>
+                                        <div class="code-text" style="font-family:${BRAND_FONT}; font-size:42px; line-height:1; letter-spacing:14px; font-weight:700; color:#1e1b4b; padding-left:14px;">${escHtml(
                                             code
                                         )}</div>
                                     </td>
@@ -76,7 +92,7 @@ export const codeBox = (code: string | number): string => `
                             </table>`;
 
 /* Envoltorio común: documento HTML email-safe con la fuente incrustada, cabecera
- * azul (logo + "Bankybondy" en Poppins + subtítulo opcional), el cuerpo que se pase,
+ * índigo (logo + "Bankybondy" en Poppins + subtítulo opcional), el cuerpo que se pase,
  * y el pie de marca. `body` es HTML ya armado; `footerNote` es el texto chico del pie. */
 export const wrapEmail = (opts: {
     title: string;
@@ -92,11 +108,15 @@ export const wrapEmail = (opts: {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="color-scheme" content="light dark">
-    <meta name="supported-color-schemes" content="light dark">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
     <title>${escHtml(title)}</title>
     <!--[if mso]>
     <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+    <style type="text/css">
+        .bb-capsule { background-color:transparent !important; border:0 !important; padding:0 !important; }
+        .container { width:600px !important; }
+    </style>
     <![endif]-->
     <style>
 ${POPPINS_FONTFACE}
@@ -105,36 +125,31 @@ ${POPPINS_FONTFACE}
         img { -ms-interpolation-mode: bicubic; border: 0; }
         body { margin: 0 !important; padding: 0 !important; width: 100% !important; }
         body, .poppins { font-family: 'Poppins', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; }
-        a { color: #1f4288; }
+        a { color: #4f46e5; }
         @media only screen and (max-width: 620px) {
             .container { width: 100% !important; }
             .px { padding-left: 24px !important; padding-right: 24px !important; }
             .h1 { font-size: 23px !important; }
             .code-text { font-size: 36px !important; letter-spacing: 10px !important; }
         }
-        @media (prefers-color-scheme: dark) {
-            .card { background: #0f172a !important; }
-            .card-text { color: #e2e8f0 !important; }
-            .muted { color: #94a3b8 !important; }
-            .row { border-color: #1e293b !important; }
-        }
     </style>
 </head>
-<body class="poppins" style="margin:0; padding:0; background-color:#eef2f9; font-family:${BRAND_FONT};">
-    <div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px; color:#eef2f9; opacity:0;">${escHtml(
+<body class="poppins" style="margin:0; padding:0; background-color:#eef2f7; font-family:${BRAND_FONT};">
+    <div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px; color:#eef2f7; opacity:0;">${escHtml(
         preheader
     )}</div>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f9;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f7;">
         <tr>
             <td align="center" style="padding:32px 16px;">
-                <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px; max-width:600px; background-color:#ffffff; border-radius:20px; overflow:hidden; box-shadow:0 10px 30px rgba(15,32,72,0.12);">
+                <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; background-color:#ffffff; border-radius:20px; overflow:hidden; box-shadow:0 10px 30px rgba(15,23,42,0.10);">
                     <tr>
-                        <td align="center" style="background-color:#1f4288; background-image:linear-gradient(135deg,#1f4288 0%,#254c9a 60%,#2b7fff 140%); padding:36px 24px 28px 24px;">
+                        <td align="center" style="background-color:#f4f6ff; border-bottom:1px solid #e4e7ec; padding:34px 24px 28px 24px;">
 ${BRAND_LOGO}
-                            <div class="poppins" style="margin-top:18px; font-family:${BRAND_FONT}; font-weight:700; font-size:26px; line-height:1.1; color:#ffffff; letter-spacing:-0.3px;">Bankybondy</div>
+                            <div class="poppins" style="margin-top:16px; font-family:${BRAND_FONT}; font-weight:700; font-size:26px; line-height:1.1; color:#0f172a; letter-spacing:-0.3px;">Bankybondy</div>
+                            <div class="poppins" style="margin-top:4px; font-family:${BRAND_FONT}; font-weight:400; font-size:12px; line-height:1.4; letter-spacing:0.3px; color:#4f46e5;">Creando la realidad juntos.</div>
                             ${
                                 subtitle
-                                    ? `<div class="poppins" style="margin-top:6px; font-family:${BRAND_FONT}; font-weight:400; font-size:13px; line-height:1.4; color:#c9d8f5;">${escHtml(
+                                    ? `<div class="poppins" style="margin-top:10px; font-family:${BRAND_FONT}; font-weight:400; font-size:13px; line-height:1.5; color:#475467;">${escHtml(
                                           subtitle
                                       )}</div>`
                                     : ''
@@ -143,10 +158,11 @@ ${BRAND_LOGO}
                     </tr>
                     ${body}
                     <tr>
-                        <td align="center" style="background-color:#f6f8fd; padding:26px 40px 30px 40px; border-top:1px solid #e7edf7;">
-                            <div class="poppins" style="font-family:${BRAND_FONT}; font-weight:700; font-size:16px; line-height:1.2; color:#1f4288; margin-bottom:8px;">Bankybondy</div>
-                            <p class="poppins" style="margin:0 0 4px 0; font-family:${BRAND_FONT}; font-weight:400; font-size:12px; line-height:1.6; color:#8a97ad;">${footerNote}</p>
-                            <p class="poppins" style="margin:0; font-family:${BRAND_FONT}; font-weight:400; font-size:12px; line-height:1.6; color:#8a97ad;">© ${new Date().getFullYear()} Bankybondy · <a href="https://bankybondy.com" style="color:#1f4288; text-decoration:none;">bankybondy.com</a></p>
+                        <td align="center" style="background-color:#f8fafc; padding:26px 40px 30px 40px; border-top:1px solid #e4e7ec;">
+                            <div class="poppins" style="font-family:${BRAND_FONT}; font-weight:700; font-size:16px; line-height:1.2; color:#0f172a; margin-bottom:2px;">Bankybondy</div>
+                            <div class="poppins" style="font-family:${BRAND_FONT}; font-weight:400; font-size:11px; line-height:1.4; letter-spacing:0.3px; color:#4f46e5; margin-bottom:10px;">Creando la realidad juntos.</div>
+                            <p class="poppins" style="margin:0 0 4px 0; font-family:${BRAND_FONT}; font-weight:400; font-size:12px; line-height:1.6; color:#667085;">${footerNote}</p>
+                            <p class="poppins" style="margin:0; font-family:${BRAND_FONT}; font-weight:400; font-size:12px; line-height:1.6; color:#667085;">© ${new Date().getFullYear()} Bankybondy · <a href="https://bankybondy.com" style="color:#4f46e5; text-decoration:none;">bankybondy.com</a></p>
                         </td>
                     </tr>
                 </table>

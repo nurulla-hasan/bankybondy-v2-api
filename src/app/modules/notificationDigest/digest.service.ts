@@ -92,13 +92,13 @@ const CATEGORY_META: Record<
 > = {
     matches: {
         label: 'Matches',
-        color: '#1f4288',
+        color: '#4f46e5',
         showCount: false,
         line: () => 'Aparecieron nuevos matches para tus vínculos.',
     },
     trueques: {
         label: 'Trueques',
-        color: '#0ea5e9',
+        color: '#06b6d4',
         showCount: true,
         line: (n) =>
             n === 1
@@ -116,7 +116,7 @@ const CATEGORY_META: Record<
     },
     amistades: {
         label: 'Amistades',
-        color: '#8b5cf6',
+        color: '#10b981',
         showCount: true,
         line: (n) =>
             n === 1
@@ -128,10 +128,10 @@ const CATEGORY_META: Record<
 // Secciones de muestra para el PREVIEW cuando el usuario no tiene actividad real
 // (para poder ver el diseño igual).
 const SAMPLE_SECTIONS: DigestSection[] = [
-    { label: 'Matches', color: '#1f4288', count: null, line: 'Aparecieron nuevos matches para tus vínculos.' },
-    { label: 'Trueques', color: '#0ea5e9', count: 2, line: 'Tenés 2 novedades en tus trueques.' },
+    { label: 'Matches', color: '#4f46e5', count: null, line: 'Aparecieron nuevos matches para tus vínculos.' },
+    { label: 'Trueques', color: '#06b6d4', count: 2, line: 'Tenés 2 novedades en tus trueques.' },
     { label: 'Reseñas', color: '#f59e0b', count: 1, line: 'Alguien contó cómo fue encontrarse con vos.' },
-    { label: 'Amistades', color: '#8b5cf6', count: 3, line: 'Tenés 3 novedades de amistad.' },
+    { label: 'Amistades', color: '#10b981', count: 3, line: 'Tenés 3 novedades de amistad.' },
 ];
 
 /** Junta la actividad de los últimos 7 días de un usuario y arma las secciones

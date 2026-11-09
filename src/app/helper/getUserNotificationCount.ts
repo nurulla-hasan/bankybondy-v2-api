@@ -42,13 +42,29 @@ const getUserNotificationCount = async (receiver: string) => {
     }
 
     const unseenCount = await Notification.countDocuments(filter);
-    const latestNotification = await Notification.findOne({
+    const latestFilter: Record<string, any> = {
         $or: [{ receiver }, { receiver: 'all' }],
         deleteBy: { $ne: new mongoose.Types.ObjectId(receiver) },
         redirectId: { $nin: blockedIds },
-    })
+    };
+    if (mutedTypes.length) {
+        latestFilter.type = { $nin: mutedTypes };
+    }
+    const latestRaw = await Notification.findOne(latestFilter)
+        .select({ deleteBy: 0, notifiedSignatures: 0 })
         .sort({ createdAt: -1 })
         .lean();
+    const latestNotification = latestRaw
+        ? (() => {
+              const { seenBy = [], ...item } = latestRaw as any;
+              return {
+                  ...item,
+                  seen: (seenBy as any[]).some(
+                      (id) => String(id) === String(receiver)
+                  ),
+              };
+          })()
+        : null;
     return { unseenCount, latestNotification };
 };
 

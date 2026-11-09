@@ -146,7 +146,7 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
     if (uniqueRequestedBonds.length === 0) {
         throw new AppError(
             httpStatus.BAD_REQUEST,
-            'Un vínculo necesita los vínculos (bonos) que lo forman.'
+            'Un vínculo necesita las solicitudes que lo forman.'
         );
     }
     const bondsForValidation: any[] = await BondRequest.find({

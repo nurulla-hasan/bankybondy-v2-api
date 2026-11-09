@@ -1,7 +1,8 @@
-/* Plantilla del resumen/notificaciones (digest) — estética Bankybondy unificada.
- * Reusa la cáscara compartida de marca (logo exacto + Poppins incrustada + azul)
- * de mailTemplate/brandAssets. Mantiene la interfaz DigestSection y el orden de
- * secciones que arma digest.service.ts (matches/trueques/reseñas/amistades). */
+/* Plantilla del resumen/notificaciones (digest) — estética Bankybondy v2 unificada.
+ * Reusa la cáscara compartida de marca (logo semáforo + Poppins incrustada +
+ * paleta índigo/cian/esmeralda) de mailTemplate/brandAssets. Mantiene la interfaz
+ * DigestSection y el orden de secciones que arma digest.service.ts
+ * (matches/trueques/reseñas/amistades). */
 
 import { wrapEmail, BRAND_FONT, escHtml } from '../../mailTemplate/brandAssets';
 
@@ -14,19 +15,24 @@ export interface DigestSection {
 
 // Tinte suave del círculo por color de categoría (sin alpha-hex: Outlook no lo soporta).
 const TINT: Record<string, string> = {
-    '#1f4288': '#e8eefb', // matches (azul)
-    '#0ea5e9': '#e2f4fd', // trueques (celeste)
-    '#f59e0b': '#fdf2e0', // reseñas (ámbar)
-    '#8b5cf6': '#efeafe', // amistades (violeta)
+    '#4f46e5': '#eef2ff', // matches (índigo)
+    '#06b6d4': '#ecfeff', // trueques (cian)
+    '#f59e0b': '#fffbeb', // reseñas (ámbar)
+    '#10b981': '#ecfdf5', // amistades (esmeralda)
 };
-const tintFor = (c: string): string => TINT[(c || '').toLowerCase()] || '#eef2f9';
+const tintFor = (c: string): string => TINT[(c || '').toLowerCase()] || '#f5f7ff';
+// Contraste de la pastilla: sobre índigo va blanco; sobre cian/ámbar/esmeralda, tinta.
+const badgeTextFor = (c: string): string =>
+    (c || '').toLowerCase() === '#4f46e5' ? '#ffffff' : '#0f172a';
 
 const sectionRow = (s: DigestSection, last: boolean): string => {
-    const border = last ? '' : 'border-bottom:1px solid #eef1f6;';
+    const border = last ? '' : 'border-bottom:1px solid #e4e7ec;';
     const badge =
         s.count === null
             ? `<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background-color:${s.color};"></span>`
-            : `<span style="display:inline-block;min-width:22px;height:22px;line-height:22px;padding:0 6px;border-radius:11px;background-color:${s.color};color:#ffffff;font-family:${BRAND_FONT};font-size:12px;font-weight:700;text-align:center;">${escHtml(
+            : `<span style="display:inline-block;min-width:22px;height:22px;line-height:22px;padding:0 6px;border-radius:11px;background-color:${s.color};color:${badgeTextFor(
+                  s.color
+              )};font-family:${BRAND_FONT};font-size:12px;font-weight:700;text-align:center;">${escHtml(
                   String(s.count)
               )}</span>`;
     return `
@@ -39,7 +45,7 @@ const sectionRow = (s: DigestSection, last: boolean): string => {
                                         </tr></table>
                                     </td>
                                     <td class="row" valign="top" style="padding:16px 0 16px 14px;${border}">
-                                        <div class="poppins card-text" style="font-family:${BRAND_FONT};font-size:15px;font-weight:700;color:#101828;">${escHtml(
+                                        <div class="poppins card-text" style="font-family:${BRAND_FONT};font-size:15px;font-weight:700;color:#0f172a;">${escHtml(
                                             s.label
                                         )}</div>
                                         <div class="poppins muted" style="font-family:${BRAND_FONT};font-weight:400;font-size:14px;color:#475467;line-height:1.5;margin-top:2px;">${escHtml(
@@ -64,8 +70,8 @@ export const buildDigestHtml = (opts: {
     const body = `
                     <tr>
                         <td class="card px" style="background-color:#ffffff; padding:34px 44px 6px 44px;">
-                            <h1 class="h1 poppins card-text" style="margin:0 0 10px 0; font-family:${BRAND_FONT}; font-size:24px; line-height:1.28; color:#0f2044; font-weight:700;">${hello}</h1>
-                            <p class="poppins card-text" style="margin:0; font-family:${BRAND_FONT}; font-weight:400; font-size:15px; line-height:1.6; color:#475467;">Esto es lo que pasó en tu mundo <strong class="poppins" style="font-weight:700; color:#1f4288;">Bankybondy</strong>:</p>
+                            <h1 class="h1 poppins card-text" style="margin:0 0 10px 0; font-family:${BRAND_FONT}; font-size:24px; line-height:1.28; color:#0f172a; font-weight:700;">${hello}</h1>
+                            <p class="poppins card-text" style="margin:0; font-family:${BRAND_FONT}; font-weight:400; font-size:15px; line-height:1.6; color:#475467;">Esto es lo que pasó en tu mundo <strong class="poppins" style="font-weight:700; color:#4f46e5;">Bankybondy</strong>:</p>
                         </td>
                     </tr>
                     <tr>
@@ -76,11 +82,11 @@ export const buildDigestHtml = (opts: {
                     </tr>
                     <tr>
                         <td class="px" align="center" style="padding:26px 44px 30px 44px;">
-                            <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${url}" style="height:48px;v-text-anchor:middle;width:230px;" arcsize="29%" strokecolor="#1f4288" fillcolor="#1f4288"><w:anchorlock/><center style="color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:15px;font-weight:bold;">Ver en Bankybondy</center></v:roundrect><![endif]-->
+                            <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${url}" style="height:48px;v-text-anchor:middle;width:230px;" arcsize="29%" strokecolor="#4f46e5" fillcolor="#4f46e5"><w:anchorlock/><center style="color:#ffffff;font-family:Segoe UI,Arial,sans-serif;font-size:15px;font-weight:bold;">Ver en Bankybondy</center></v:roundrect><![endif]-->
                             <!--[if !mso]><!-->
-                            <a href="${url}" class="poppins" style="display:inline-block; background-color:#1f4288; background-image:linear-gradient(135deg,#1f4288 0%,#2b7fff 130%); color:#ffffff; font-family:${BRAND_FONT}; font-weight:700; font-size:15px; line-height:1; text-decoration:none; padding:16px 34px; border-radius:14px;">Ver en Bankybondy</a>
+                            <a href="${url}" class="poppins" style="display:inline-block; background-color:#4f46e5; color:#ffffff; font-family:${BRAND_FONT}; font-weight:700; font-size:15px; line-height:1; text-decoration:none; padding:16px 34px; border-radius:14px;">Ver en Bankybondy</a>
                             <!--<![endif]-->
-                            <div class="poppins muted" style="font-family:${BRAND_FONT}; font-weight:400; font-size:12px; color:#98a2b3; margin-top:14px;">Iniciás sesión en bankybondy.com como siempre — este correo no te pide ningún dato.</div>
+                            <div class="poppins muted" style="font-family:${BRAND_FONT}; font-weight:400; font-size:12px; color:#667085; margin-top:14px;">Iniciás sesión en bankybondy.com como siempre — este correo no te pide ningún dato.</div>
                         </td>
                     </tr>`;
 

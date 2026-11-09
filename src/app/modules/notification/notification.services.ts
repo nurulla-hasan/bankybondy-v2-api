@@ -58,7 +58,6 @@ const getAllNotificationFromDB = async (
         if (mutedTypes.length) baseFilter.type = { $nin: mutedTypes };
         const notificationQuery = new QueryBuilder(
             Notification.find(baseFilter).select({
-                seenBy: 0,
                 deleteBy: 0,
                 notifiedSignatures: 0,
             }),
@@ -69,7 +68,21 @@ const getAllNotificationFromDB = async (
             .sort()
             .paginate()
             .fields();
-        const result = await notificationQuery.modelQuery;
+        const docs = await notificationQuery.modelQuery;
+        const meId = String(user.profileId);
+        // Read state is per-user: expose a boolean `seen` and never the whole
+        // `seenBy` array (it would leak every reader's profile id).
+        const result = (Array.isArray(docs) ? docs : []).map((doc: any) => {
+            const item =
+                typeof doc?.toObject === 'function' ? doc.toObject() : doc;
+            const seenBy = Array.isArray(item?.seenBy) ? item.seenBy : [];
+            delete item.seenBy;
+
+            return {
+                ...item,
+                seen: seenBy.some((id: any) => String(id) === meId),
+            };
+        });
         const meta = await notificationQuery.countTotal();
         return { meta, result };
     }
