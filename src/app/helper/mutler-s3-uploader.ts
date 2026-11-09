@@ -4,6 +4,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { Request } from 'express';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
+import AppError from '../error/appError';
 
 /**
  * Configure and setup AWS S3 client
@@ -15,6 +16,36 @@ const s3 = new S3Client({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
     },
 });
+
+const ALLOWED_MIMETYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/jpg',
+    'image/webp',
+    'image/avif',
+    'video/mp4',
+    'video/mov',
+    'video/quicktime',
+    'video/mpeg',
+    'video/ogg',
+    'video/webm',
+    'video/x-msvideo',
+    'video/x-flv',
+    'video/3gpp',
+    'video/3gpp2',
+    'video/x-matroska',
+    'audio/mpeg',
+    'audio/mp3',
+    'audio/wav',
+    'audio/x-wav',
+    'audio/ogg',
+    'audio/webm',
+    'audio/aac',
+    'audio/flac',
+    'audio/x-m4a',
+    'audio/mp4',
+    'application/pdf',
+]);
 
 /**
  * Setup file upload to AWS S3
@@ -51,41 +82,23 @@ export const uploadFile = () => {
             // Allow requests without any files
             cb(null, true);
         } else if (allowedFieldnames.includes(file.fieldname)) {
-            if (
-                file.mimetype === 'image/jpeg' ||
-                file.mimetype === 'image/png' ||
-                file.mimetype === 'image/jpg' ||
-                file.mimetype === 'image/webp' ||
-                file.mimetype === 'video/mp4' ||
-                file.mimetype === 'video/mov' ||
-                file.mimetype === 'video/quicktime' ||
-                file.mimetype === 'video/mpeg' ||
-                file.mimetype === 'video/ogg' ||
-                file.mimetype === 'video/webm' ||
-                file.mimetype === 'video/x-msvideo' ||
-                file.mimetype === 'video/x-flv' ||
-                file.mimetype === 'video/3gpp' ||
-                file.mimetype === 'video/3gpp2' ||
-                file.mimetype === 'video/x-matroska' ||
-                file.mimetype === 'audio/mpeg' ||
-                file.mimetype === 'audio/mp3' ||
-                file.mimetype === 'audio/wav' ||
-                file.mimetype === 'audio/x-wav' ||
-                file.mimetype === 'audio/ogg' ||
-                file.mimetype === 'audio/webm' ||
-                file.mimetype === 'audio/aac' ||
-                file.mimetype === 'audio/flac' ||
-                file.mimetype === 'audio/x-m4a' ||
-                file.mimetype === 'audio/mp4' ||
-                file.mimetype === 'application/pdf' ||
-                file.mimetype === 'image/avif'
-            ) {
+            // El navegador manda el tipo con parametros (p.ej. MediaRecorder de
+            // Chrome: 'audio/webm;codecs=opus'). Comparar por igualdad exacta
+            // rechazaba grabaciones validas y el cliente recibia un 500. Se
+            // normaliza a la parte base del tipo antes de validar.
+            const mimetype = (file.mimetype || '')
+                .split(';')[0]
+                .trim()
+                .toLowerCase();
+            if (ALLOWED_MIMETYPES.has(mimetype)) {
                 cb(null, true);
             } else {
-                cb(new Error('Invalid file type'));
+                // 400 (no 500): el archivo lo eligio el cliente, no es un fallo
+                // interno del servidor.
+                cb(new AppError(400, 'Invalid file type'));
             }
         } else {
-            cb(new Error('Invalid fieldname'));
+            cb(new AppError(400, 'Invalid fieldname'));
         }
     };
 

@@ -4,6 +4,7 @@ import { clampLimit, clampPage } from '../../utilities/pagination';
 import { escapeRegex } from '../../utilities/escapeRegex';
 import AppError from '../../error/appError';
 import { deleteFileFromS3 } from '../../helper/deleteFromS3';
+import { ENUM_AUDIO_MODERATION_STATUS } from '../audio/audio.interface';
 import { ITopic } from './topic.interface';
 import { Topic } from './topic.model';
 
@@ -55,16 +56,30 @@ const getAllTopics = async (query: Record<string, unknown>) => {
     const topics = await Topic.aggregate([
         { $match: matchStage },
         {
+            // `totalAudios` must match what the feed can actually show: only
+            // approved audios (the feed filters `moderationStatus: 'ready'` and
+            // `isBlocked: false`). Counting every row made topic chips advertise
+            // conversations that were still processing or had failed moderation.
             $lookup: {
                 from: 'audios',
-                localField: '_id',
-                foreignField: 'audioTopic',
+                let: { topicId: '$_id' },
+                pipeline: [
+                    {
+                        $match: {
+                            $expr: { $eq: ['$audioTopic', '$$topicId'] },
+                            moderationStatus:
+                                ENUM_AUDIO_MODERATION_STATUS.READY,
+                            isBlocked: false,
+                        },
+                    },
+                    { $count: 'count' },
+                ],
                 as: 'audios',
             },
         },
         {
             $addFields: {
-                totalAudios: { $size: '$audios' },
+                totalAudios: { $ifNull: [{ $first: '$audios.count' }, 0] },
             },
         },
         { $project: { audios: 0 } },

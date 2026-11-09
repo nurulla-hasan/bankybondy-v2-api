@@ -814,6 +814,10 @@ const updateAudio = async (
               ...safePayload,
               moderationStatus: ENUM_AUDIO_MODERATION_STATUS.PROCESSING,
               moderationReason: '',
+              // A replaced file is a fresh moderation job: don't inherit the
+              // retry budget already spent by the previous file, or the sweep
+              // would refuse to retry it.
+              moderationAttempts: 0,
           }
         : safePayload;
 
