@@ -3,6 +3,7 @@
  * src/scripts/verifyMatchFeed.ts contra Mongo. */
 import { recordToFeedDocs, buildMatchKey, rankScoreOf, topMatchKeys } from './matching.feed';
 import type { MatchRecord } from './matching.compute';
+import { MATCHING } from './matching.config';
 
 type Case = [name: string, cond: boolean];
 
@@ -47,6 +48,10 @@ const cases: Case[] = [
     ['ranking: legacy no descuenta', rankScoreOf(0.8, 4, true) === 0.8],
     ['top keys: ordena por score desc', topMatchKeys([{ matchKey: 'x', score: 0.1 }, { matchKey: 'y', score: 0.9 }], 1)[0] === 'y'],
     ['top keys: deriva la firma si falta matchKey', topMatchKeys([{ bonds: [B, A], score: 0.9 }], 1)[0] === `${A}|${B}`],
+    // La poda no puede cortar por debajo de lo que el serving lee: si
+    // min(cap, scan) queda chico, un bond denso se sirve topeado en silencio.
+    ['poda: ventana >= 2x maxResults (min(cap, scan))', Math.min(MATCHING.feedMaxRowsPerBond, MATCHING.feedScanLimit) >= 2 * MATCHING.maxResults],
+    ['poda: cap cubre el scan completo', MATCHING.feedMaxRowsPerBond >= MATCHING.feedScanLimit],
 ];
 
 export const runMatchingFeedTests = (): { pass: number; fail: number } => {

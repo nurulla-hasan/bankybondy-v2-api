@@ -280,9 +280,16 @@ export const MATCHING = {
     }),
     // Tope de filas por participante (poda post-recompute). Sin esto, un bond
     // denso vuelve a acumular miles de filas por la puerta de atrás.
-    feedMaxRowsPerBond: num(process.env.MATCH_FEED_MAX_ROWS_PER_BOND, 150, {
+    //
+    // Debe ser >= `feedScanLimit`: podar por debajo de lo que el serving puede
+    // leer TOPA los matches EN SILENCIO. Medido con 150: tratos reales de 2338
+    // (legacy BondMatch) servidos como 150 en feed. El serving devuelve como
+    // mucho `maxResults` (100) sobre las `feedScanLimit` (400) mejores filas,
+    // así que 400 deja 300 filas de margen para las que mueren al servir
+    // (bloqueos, fantasmas). Guardado por matching.feed.test.ts.
+    feedMaxRowsPerBond: num(process.env.MATCH_FEED_MAX_ROWS_PER_BOND, 400, {
         min: 100,
-        max: 1000,
+        max: 4000,
     }),
     // TTL de seguridad: filas que dejaron de refrescarse se borran solas.
     // Mantener >= serveTtlMinutes (48 h por defecto) para no vaciar feeds vivos.
