@@ -16,7 +16,7 @@ const createGroupChat = catchAsync(async (req, res) => {
         req.user.profileId,
         req.body
     );
-    // El chat nuevo aparece en la lista de TODOS los miembros sin refrescar.
+    // New chat appears in every member's list without a refresh.
     await notifyGroupConversation(getSafeIO(), result?._id);
     sendResponse(res, {
         statusCode: httpStatus.OK,
@@ -48,8 +48,7 @@ const addMember = catchAsync(async (req, res) => {
         req.params.id,
         req.body.memberId
     );
-    // Solo al que entra: su lista lo recibe sin refrescar. Los que ya estaban no
-    // necesitan que les mueva nada (y al que se saca no se le emite, ver helper).
+    // Only the joining member gets the live push.
     await notifyGroupConversation(getSafeIO(), result?._id, [
         String(req.body.memberId),
     ]);
@@ -74,8 +73,7 @@ const removeMember = catchAsync(async (req, res) => {
     });
 });
 
-// El roster completo, sin la página de `get-chat-list`. `data` es un objeto
-// pelado, como los demás handlers de esta ruta.
+// Full roster, unlike the paginated get-chat-list. `data` stays a plain object.
 const getGroupMembers = catchAsync(async (req, res) => {
     const result = await chatGroupServices.getGroupMembers(
         req.user.profileId,

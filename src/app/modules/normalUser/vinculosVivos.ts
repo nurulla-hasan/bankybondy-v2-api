@@ -4,40 +4,27 @@ import { ENUM_BOND_REQUEST_STATUS } from '../bondRequest/bondRequest.enum';
 import BondRequest from '../bondRequest/bondRequest.model';
 import NormalUser from './normalUser.model';
 
-/* `NormalUser.hasActiveBonds` — "tiene al menos un vínculo VIVO".
+/* `NormalUser.hasActiveBonds` — "has at least one LIVE bond".
  *
- * Es la primera clave de orden de Personas en modo Destacados (el modo por
- * defecto). Antes se calculaba EN CADA CARGA con un `distinct` sobre los vínculos
- * (documentos de 40 KB) y un `$in` de todos los dueños contra todos los usuarios:
- * costo cuadrático, medido en 29/9 como el primer muro de escala (p95 de 35 s con
- * 3.000 usuarios y 20 cargas a la vez en 2 vCPU). Guardado en el usuario, con un
- * índice que sigue el orden de la pantalla, la página p lee ~15·p usuarios en
- * vez de ordenar a todos.
+ * Primary sort key for People in Featured mode. Computing it per load with a
+ * `distinct` over bonds plus a `$in` of all owners was quadratic (p95 35s measured
+ * 29/9). Stored on the user with a matching index, page p reads ~15·p users.
  *
- * Un dato desnormalizado que se desincroniza es un bug SILENCIOSO, así que se
- * mantiene por tres caminos:
- *   1. En las escrituras de la API que cambian si un vínculo está vivo: el alta
- *      lo enciende con un `$set` directo dentro de su transacción
- *      (bondRequest.service.ts); pausa, reanudar, baja lógica, borrado y
- *      reactivación llaman a `recalcularVinculosVivos`.
- *   2. Al arrancar la API, después del backfill de la agenda de D1 (que normaliza
- *      `isPause`/`isLinked` ausentes y con eso cambia quién cuenta como vivo).
- *   3. En cada vuelta del cron del barrido del worker (MATCH_SWEEP_CRON, cada
- *      5 min por defecto), antes del barrido: `reconciliarVinculosVivos`, la
- *      red que repara cualquier escritura que se haya escapado (scripts a mano,
- *      una carrera entre dos cambios del mismo usuario, o una escritura que cae
- *      mientras la propia red corre).
+ * A desynced denormalized field is a SILENT bug, so it is maintained three ways:
+ *   1. API writes that change liveness: create sets it directly inside its
+ *      transaction; pause/resume/soft delete/delete/reactivate call
+ *      `recalcularVinculosVivos`.
+ *   2. At boot, after the D1 backfill (which normalizes missing isPause/isLinked).
+ *   3. Each sweep cron round (MATCH_SWEEP_CRON): `reconciliarVinculosVivos` repairs
+ *      any escaped write (manual scripts, races, a write during the repair).
  *
- * `timestamps: false` en TODAS las escrituras de este archivo, y es obligatorio:
- * `updatedAt` es la TERCERA clave de orden de Destacados ("actividad reciente").
- * Tocarlo desde acá cambiaría el orden de todo el mundo cada vez que corre la
- * reconciliación.
+ * `timestamps: false` on EVERY write here is mandatory: `updatedAt` is the THIRD
+ * Featured sort key ("recent activity"), so touching it would reorder everyone.
  */
 
-// El MISMO filtro que usaba el listado. NO es el del barrido del matcheo, que
-// mira sólo WAITING_FOR_LINK con `isLinked: false`: acá cuentan también ONGOING
-// y un `isLinked` ausente. Un `isPause` ausente NO cuenta como vivo, igual que
-// antes.
+// The SAME filter the listing used. NOT the matching sweep one, which only looks
+// at WAITING_FOR_LINK with `isLinked: false`: ONGOING and a missing `isLinked`
+// count here too. A missing `isPause` does NOT count as live, as before.
 export const FILTRO_VINCULO_VIVO = {
     status: {
         $in: [
@@ -49,9 +36,8 @@ export const FILTRO_VINCULO_VIVO = {
     isLinked: { $ne: true },
 };
 
-/** Recalcula el dato de UN usuario desde sus vínculos. No lanza: si falla, queda
- *  en el log y lo repara la reconciliación del barrido. La operación del usuario
- *  (pausar, borrar…) ya se hizo y no tiene que fallar por esto. */
+/** Recomputes ONE user's flag from its bonds. Never throws: failures are logged and
+ *  fixed by the sweep reconciliation; the user's operation already succeeded. */
 export const recalcularVinculosVivos = async (
     userId: Types.ObjectId | string,
     session?: ClientSession
@@ -75,9 +61,8 @@ export const recalcularVinculosVivos = async (
     }
 };
 
-/** Recalcula a TODOS de una vez: sólo escribe a quien está mal. Idempotente. Es el
- *  backfill al arrancar y la red de cada vuelta del barrido. Medido el 29/9 con
- *  30.000 usuarios: 0,5-0,9 s, y ~3,5 s en frío. */
+/** Recomputes EVERYONE at once, writing only divergent rows. Idempotent; runs as
+ *  the boot backfill and the per-sweep safety net (~0.5-0.9s for 30k users). */
 export const reconciliarVinculosVivos = async () => {
     const duenos = await BondRequest.distinct('user', FILTRO_VINCULO_VIVO);
     const [encendidos, apagados] = await Promise.all([
@@ -86,8 +71,8 @@ export const reconciliarVinculosVivos = async () => {
             { $set: { hasActiveBonds: true } },
             { timestamps: false }
         ),
-        // `$ne: false` incluye el campo AUSENTE: los usuarios anteriores a este
-        // cambio quedan en false explícito, que es lo que ordena el índice.
+        // `$ne: false` matches the MISSING field: users predating this change get
+        // an explicit false, which is what the index orders by.
         NormalUser.updateMany(
             { _id: { $nin: duenos }, hasActiveBonds: { $ne: false } },
             { $set: { hasActiveBonds: false } },

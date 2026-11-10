@@ -6,12 +6,8 @@ import NormalUser from '../normalUser/normalUser.model';
 import UserBlock from './userBlock.model';
 
 /**
- * Helper reutilizable: devuelve los ids (como string) que el usuario bloqueo
- * MAS los ids que lo bloquearon a el. Se usa para excluir contenido de/para
- * usuarios bloqueados en los endpoints de lectura clave.
- *
- * Devuelve strings para poder comparar/filtrar en JS con facilidad; usar
- * `getBlockedObjectIdsFor` cuando se necesiten ObjectId para un `$nin`.
+ * Ids (as strings) the user blocked PLUS those who blocked them; used to exclude
+ * content in key read endpoints. Use `getBlockedObjectIdsFor` when a `$nin` needs ObjectIds.
  */
 export const getBlockedIdsFor = async (userId: string): Promise<string[]> => {
     const uid = new Types.ObjectId(userId);
@@ -25,7 +21,7 @@ export const getBlockedIdsFor = async (userId: string): Promise<string[]> => {
     for (const row of rows) {
         const blocker = row.blocker?.toString();
         const blocked = row.blocked?.toString();
-        // Agregar el "otro" extremo de la relacion (nunca el propio usuario).
+        // Add the "other" end of the relation (never the user).
         if (blocker && blocker !== userId) ids.add(blocker);
         if (blocked && blocked !== userId) ids.add(blocked);
     }
@@ -33,8 +29,7 @@ export const getBlockedIdsFor = async (userId: string): Promise<string[]> => {
 };
 
 /**
- * Igual que getBlockedIdsFor pero devuelve ObjectId[], listo para usar en un
- * `{ $nin: [...] }` de mongoose/aggregation.
+ * Same as getBlockedIdsFor but returns ObjectId[], ready for `{ $nin: [...] }`.
  */
 export const getBlockedObjectIdsFor = async (
     userId: string
@@ -44,15 +39,9 @@ export const getBlockedObjectIdsFor = async (
 };
 
 /**
- * Devuelve el PRIMER par con relacion de bloqueo (en cualquier sentido) dentro
- * de un conjunto de usuarios, o null si estan todos limpios entre si.
- *
- * Existe porque un vinculo grupal es una conversacion de TODOS contra TODOS: no
- * alcanza con mirar al que lo crea. En un vinculo de tres (A crea con B y C), si
- * B bloqueo a C, el bloqueo se ignoraba y B y C terminaban en el mismo chat.
- * `getBlockedIdsFor` responde por UN usuario; para cubrir todos los pares harian
- * falta N consultas. Aca alcanza UNA: si existe una fila cuyo blocker Y cuyo
- * blocked estan ambos en el conjunto, ese es un par bloqueado.
+ * First block-related pair (either direction) inside a set of users, or null. A group
+ * link is an ALL-vs-ALL conversation, so checking only the creator missed B blocking C.
+ * One query beats N `getBlockedIdsFor` calls.
  */
 export const findBlockedPairAmong = async (
     userIds: (string | Types.ObjectId)[]
@@ -60,7 +49,7 @@ export const findBlockedPairAmong = async (
     const unique = Array.from(
         new Set(userIds.filter(Boolean).map((id) => id.toString()))
     ).filter((id) => Types.ObjectId.isValid(id));
-    // Con 0 o 1 participante no hay pares posibles.
+    // With 0 or 1 participant there are no possible pairs.
     if (unique.length < 2) return null;
 
     const objectIds = unique.map((id) => new Types.ObjectId(id));
@@ -100,7 +89,7 @@ const blockUser = async (blockerId: string, blockedId: string) => {
         });
         return result;
     } catch (error: unknown) {
-        // Ya estaba bloqueado (indice unico): idempotente, no es un error.
+        // Already blocked (unique index): idempotent, not an error.
         if ((error as { code?: number })?.code === 11000) {
             return await UserBlock.findOne({
                 blocker: blockerId,
@@ -132,10 +121,8 @@ const getMyBlockedUsers = async (
     const blockQuery = new QueryBuilder(
         UserBlock.find({ blocker: blockerId }).populate({
             path: 'blocked',
-            // Sin `email`: bloquear a alguien es una acción disponible para
-            // cualquier usuario autenticado, así que con bloquear un profileId
-            // válido y leer esta lista se obtenía su mail. No hace falta para
-            // reconocer a quién bloqueaste: alcanzan el nombre y la foto.
+            // No `email`: blocking is open to any authenticated user, so reading this
+            // list leaked mails; name and photo are enough to recognize someone.
             select: 'name profile_image',
         }),
         query

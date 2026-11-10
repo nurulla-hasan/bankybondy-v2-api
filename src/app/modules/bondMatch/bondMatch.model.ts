@@ -29,9 +29,9 @@ const BondMatchSchema = new Schema<IBondMatch>(
     { timestamps: true }
 );
 
-// Servir "matches de este bond" ordenados por puntaje.
+// Serve "matches of this bond" ordered by score.
 BondMatchSchema.index({ sourceBond: 1, score: -1 });
-// Invalidación por bond participante (al pausar/borrar/editar cualquier bond).
+// Invalidate by any participating bond (pause/delete/edit).
 BondMatchSchema.index({ bonds: 1 });
 
 const BondMatch = model<IBondMatch>('BondMatch', BondMatchSchema);

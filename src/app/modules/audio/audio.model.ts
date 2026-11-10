@@ -29,7 +29,7 @@ const audioSchema = new Schema<IAudio>(
         cover_image: { type: String, required: true },
         tags: { type: [String], default: [] },
         totalPlay: { type: Number, default: 0 },
-        // E1: "trending" (lo que sube). Server-controlled; lo recomputa el sweep.
+        // E1: "trending" (what's rising). Server-controlled; recomputed by the sweep.
         trendingScore: { type: Number, default: 0 },
         totalRating: {
             type: Number,
@@ -41,10 +41,9 @@ const audioSchema = new Schema<IAudio>(
         },
         duration: { type: Number, required: true },
         isBlocked: { type: Boolean, default: false },
-        // D.5 (Tanda 2): estado de moderacion asincrona. Nace en 'processing';
-        // el worker en segundo plano lo pasa a 'ready' (aprobado), 'rejected'
-        // (rechazo por contenido, borra S3) o 'failed' (fallo tecnico, conserva
-        // S3 para reprocesar). El enum se deriva de ENUM_AUDIO_MODERATION_STATUS.
+        // D.5: async moderation state. Starts 'processing'; the background worker
+        // moves it to 'ready' (approved), 'rejected' (content, deletes S3) or
+        // 'failed' (technical, keeps S3 for retry).
         moderationStatus: {
             type: String,
             enum: Object.values(ENUM_AUDIO_MODERATION_STATUS),
@@ -52,9 +51,8 @@ const audioSchema = new Schema<IAudio>(
             index: true,
         },
         moderationReason: { type: String, default: '' },
-        // EC2 (Tanda 0): cuántas veces el sweep ya reintentó moderar un audio
-        // `failed`. Con un tope (AUDIO_FAILED_MAX_RETRIES) evita reintentar para
-        // siempre un audio que falla por una causa permanente.
+        // EC2: how many times the sweep retried moderating a `failed` audio; the
+        // AUDIO_FAILED_MAX_RETRIES cap stops permanent failures from looping.
         moderationAttempts: { type: Number, default: 0 },
     },
     { timestamps: true }
@@ -84,11 +82,11 @@ const audioRatingSchema = new Schema<IAudioRating>(
     }
 );
 
-// Un usuario solo puede valorar un audio una vez (evita carrera de doble voto)
+// One rating per user per audio (guards against double-vote races).
 audioRatingSchema.index({ user: 1, audio: 1 }, { unique: true });
 
-// Feedback del oyente (comentario + feeling tags). Un unico documento por
-// (audio, usuario): el POST hace upsert sobre su propia opinion.
+// Listener feedback (comment + feeling tags): one doc per (audio, user); POST
+// upserts the caller's own opinion.
 const audioCommentSchema = new Schema<IAudioComment>(
     {
         audio: {
@@ -108,7 +106,7 @@ const audioCommentSchema = new Schema<IAudioComment>(
             maxlength: 500,
             default: '',
         },
-        // Cada tag debe pertenecer al vocabulario controlado (valor canonico).
+        // Tags must belong to the controlled vocabulary (canonical values).
         feelingTags: {
             type: [String],
             enum: FEELING_TAGS,
@@ -118,10 +116,9 @@ const audioCommentSchema = new Schema<IAudioComment>(
     { timestamps: true }
 );
 
-// Una sola opinion por usuario y audio (habilita el upsert idempotente).
 audioCommentSchema.index({ audio: 1, commentor: 1 }, { unique: true });
 
-// E0: evento de escucha calificada. Materia prima del trending honesto.
+// E0: qualified-listen event; the raw material for honest trending.
 const audioListenSchema = new Schema<IAudioListen>(
     {
         audio: { type: Schema.Types.ObjectId, ref: 'Audio', required: true },
@@ -136,18 +133,17 @@ const audioListenSchema = new Schema<IAudioListen>(
     },
     { timestamps: true }
 );
-// Dedupe: 1 escucha por (audio, oyente, día). El índice único es el candado de
-// idempotencia (el 2º intento del mismo día tira 11000 y NO vuelve a sumar).
+// One listen per (audio, listener, day): this unique index is the idempotency
+// lock (a 2nd attempt the same day throws 11000 and never double-counts).
 audioListenSchema.index(
     { audio: 1, listener: 1, dayBucket: 1 },
     { unique: true }
 );
 
-// Feed "más escuchados": orden por totalPlay dentro de lo visible. Índice para que
-// el sort deje de ser COLLSCAN cuando totalPlay empiece a tener datos reales.
+// "Most played" feed: sort by totalPlay within visible docs (avoids COLLSCAN).
 audioSchema.index({ moderationStatus: 1, isBlocked: 1, totalPlay: -1 });
 
-// Feed "trending" (lo que sube): orden por trendingScore dentro de lo visible.
+// "Trending" feed: sort by trendingScore within visible docs.
 audioSchema.index({ moderationStatus: 1, isBlocked: 1, trendingScore: -1 });
 
 const Audio = model<IAudio>('Audio', audioSchema);

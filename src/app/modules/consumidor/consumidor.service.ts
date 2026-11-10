@@ -8,11 +8,11 @@ import {
     TipoSolicitud,
 } from './consumidor.model';
 
-// Sin 0/O ni 1/I: el código se dicta por teléfono o se copia a mano.
+// No 0/O or 1/I: the code is dictated by phone or copied by hand.
 const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-/** `ARR-20260929-7K3F9Q` / `BAJ-…`. La fecha es la de Argentina. CSPRNG, igual
- *  que el OTP de auth.services.ts: el código no tiene que poder adivinarse. */
+/** `ARR-20260929-7K3F9Q` / `BAJ-…`. Date is Argentina's. CSPRNG, like the auth
+ *  OTP: the code must not be guessable. */
 export const generarCodigo = (tipo: TipoSolicitud, ahora: Date): string => {
     const dia = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Argentina/Buenos_Aires',
@@ -32,15 +32,15 @@ type DatosSolicitud = Pick<
     'tipo' | 'nombre' | 'email' | 'medioPago' | 'operacion' | 'comentario'
 > & { idioma?: 'es' | 'en' };
 
-// Los dos mails van DESPUÉS de responder. `sendEmail` no lanza (devuelve false
-// si falló), pero el `updateOne` sí puede. Un rechazo suelto NO tumba el proceso
-// (server.ts lo loguea y sigue), pero lo cuenta para su cortacircuitos, que sí
-// sale si llueven: por eso el catch, que además deja el código del pedido en el log.
+// Both mails go AFTER responding. `sendEmail` never throws (returns false on
+// failure) but the `updateOne` can: an isolated rejection does not kill the
+// process but counts toward its circuit breaker, hence the catch, which also
+// logs the request code.
 const avisar = (s: ISolicitudConsumidor, fecha: Date): void => {
     const aConsumidor = mailConsumidor(s, fecha);
     const aSoporte = mailSoporte(s, fecha);
     Promise.all([
-        // Reply-To a soporte: la respuesta a este correo es la verificación de la baja.
+        // Reply-To to support: replying to this mail is the cancellation proof.
         sendEmail({
             email: s.email,
             ...aConsumidor,
@@ -68,13 +68,13 @@ const avisar = (s: ISolicitudConsumidor, fecha: Date): void => {
         );
 };
 
-/** Guarda el pedido y devuelve el código. El código sale en la RESPUESTA (la
- *  persona lo ve en pantalla en el acto), así que el plazo de 24 horas de la
- *  Disp. 954/2025 art. 5 se cumple aunque el mail no salga. */
+/** Saves the request and returns the code. The code is in the RESPONSE (the
+ *  person sees it on screen immediately), so the 24-hour deadline of Disp.
+ *  954/2025 art. 5 holds even if the mail fails. */
 const crearSolicitud = async (datos: DatosSolicitud) => {
     const ahora = new Date();
     let creada: ISolicitudConsumidor | null = null;
-    // `codigo` es único: ante un choque (1 en ~10^9 por día) se genera otro.
+    // `codigo` is unique: on collision (1 in ~10^9 per day) generate another.
     for (let intento = 1; !creada; intento++) {
         try {
             creada = (

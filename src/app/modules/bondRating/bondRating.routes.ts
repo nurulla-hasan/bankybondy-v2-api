@@ -14,8 +14,7 @@ router.post(
     bondRatingController.addRating
 );
 
-// D.3 (Tanda 2): vista publica de las puntuaciones/comentarios recibidos por
-// un usuario. Accesible por cualquier usuario autenticado (perfil personal).
+// Public view of the ratings/comments a user received. Any authenticated user.
 router.get(
     '/public/:userId',
     auth(USER_ROLE.user, USER_ROLE.admin, USER_ROLE.superAdmin),

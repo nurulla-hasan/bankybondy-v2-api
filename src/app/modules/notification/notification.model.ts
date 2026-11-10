@@ -33,10 +33,9 @@ const notificationSchema = new Schema<INotification>(
             type: [Schema.Types.ObjectId],
             default: [],
         },
-        // Firmas de match (bonds ordenados unidos por '|') por las que YA se avisó
-        // en esta notif colapsada de MATCH. Evita "rebotar" (volver a no-leída) por
-        // una firma que reaparece por churn (contraparte pausa/vuelve, shuffle del
-        // top-100): sólo se rebota ante firmas GENUINAMENTE nuevas. Sólo MATCH.
+        // Match signatures (sorted bond ids joined by '|') already notified in this
+        // collapsed MATCH notification: stops a signature reappearing due to churn
+        // from bouncing it back to unread. Only genuinely new ones bounce. MATCH only.
         notifiedSignatures: {
             type: [String],
             default: [],
@@ -48,7 +47,7 @@ const notificationSchema = new Schema<INotification>(
     }
 );
 
-// Indice: el badge/listado filtra por receiver y ordena por fecha.
+// Listing/badge filters by receiver and sorts by date.
 notificationSchema.index({ receiver: 1, createdAt: -1 });
 
 const Notification = model<INotification>('Notification', notificationSchema);

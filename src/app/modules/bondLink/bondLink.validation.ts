@@ -4,8 +4,7 @@ import { ENUM_BOND_LINK_STATUS } from './bondLink.enum';
 
 export const createBondLinkSchema = z.object({
     body: z.object({
-        // `.min(1)`: un nombre vacío pasaba la validación y el chat del trueque se
-        // renderizaba con el fallback "Grupo" en el front. Se exige no vacío.
+        // Non-empty on purpose: an empty name passed before and the chat fell back to "Grupo".
         name: z
             .string({ required_error: 'Name is required' })
             .trim()
@@ -22,8 +21,8 @@ export const createBondLinkSchema = z.object({
     }),
 });
 
-// Rechazar: body opcional con los participantes a bloquear. El servicio filtra al
-// propio usuario y valida que sean participantes del trueque.
+// Reject: optional body with the participants to block. The service drops the caller
+// and validates the ids belong to the trade.
 export const rejectBondLinkSchema = z.object({
     body: z.object({
         blockUserIds: z

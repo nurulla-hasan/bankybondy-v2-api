@@ -2,11 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import sendEmail from '../utilities/sendEmail';
 
-// Escape de HTML. Los cuatro campos vienen de un formulario PÚBLICO y se
-// interpolan crudos en el cuerpo del mail: sin esto, cualquiera podía inyectar
-// markup (links falsos, imágenes remotas que balizan la apertura, o un `<style>`
-// que rompa el mensaje) en la casilla de soporte, que además se abre confiando
-// en que el contenido es texto.
+// Escape HTML: these four public-form fields go raw into the support inbox.
 const escapeHtml = (s: string): string =>
     s
         .replace(/&/g, '&amp;')
@@ -15,9 +11,7 @@ const escapeHtml = (s: string): string =>
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 
-// Topes de longitud: `z.string()` pelado aceptaba un mensaje de cualquier
-// tamaño, así que una sola request podía mandar megabytes a la casilla. Y
-// `email` no validaba formato: entraba cualquier cadena.
+// Length caps and email format keep public requests bounded.
 const contactUsValidationSchema = z.object({
     body: z.object({
         name: z
@@ -48,14 +42,11 @@ const sendContactUsEmail = async (req: Request, res: Response) => {
 
         const { name, phone, email, message } = req.body;
 
-        // `await` obligatorio. Sin él la promesa quedaba sin manejar (en Node
-        // moderno un rechazo sin manejar puede tumbar el proceso) y, peor, se
-        // respondía "sent successfully" aunque el envío hubiera fallado: el
-        // usuario creía que su mensaje llegó y nunca llegaba. `sendEmail` falla
-        // cerrada y devuelve booleano, así que se refleja el resultado real.
+        // `await` required: an unhandled rejection could crash the process, and
+        // the response must reflect the real send result.
         const ok = await sendEmail({
             email: 'bankybondyar@gmail.com',
-            // El asunto también lleva el nombre: se escapa igual.
+            // Subject also carries the escaped name.
             subject: `📩 New Contact Message from ${escapeHtml(name)}`,
             html: contactUsEmailTemplate({ name, phone, email, message }),
         });

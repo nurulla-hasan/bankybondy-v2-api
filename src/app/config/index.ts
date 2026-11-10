@@ -3,14 +3,10 @@ import path from 'path';
 import { z } from 'zod';
 dotenv.config({ path: path.join(process.cwd(), '.env') });
 
-// Validación fail-fast de variables de entorno críticas.
-// Si falta alguna obligatoria, el proceso aborta al arrancar (no en runtime).
-// Variables de pago CRÍTICAS sin fallback: si faltan en producción el cobro se
-// rompe, y algunas SILENCIOSAMENTE — MercadoPago acredita SOLO por webhook, así
-// que sin MP_WEBHOOK_SECRET los webhooks se rechazan (fail-closed) y el usuario
-// paga sin que se le acredite NUNCA, con la única señal siendo un log. Por eso
-// estas ABORTAN el arranque en producción: una caída ruidosa es mejor que perder
-// plata en silencio.
+// Fail-fast env validation: missing required vars abort startup, not runtime.
+// Critical payment vars have no fallback: MercadoPago credits only via webhook,
+// so without MP_WEBHOOK_SECRET users pay and are never credited — silently.
+// A loud crash is better than losing money quietly.
 const requiredPaymentEnvInProduction = [
     'PAYPAL_CLIENT_ID',
     'PAYPAL_CLIENT_SECRET',
@@ -21,9 +17,8 @@ const requiredPaymentEnvInProduction = [
     'MP_WEBHOOK_SECRET',
 ] as const;
 
-// Variables de pago RECOMENDADAS con fallback: las URLs de retorno de MP caen a
-// DONATION_*_URL y MP_WEBHOOK_URL a un default, así que faltar no rompe el cobro,
-// solo degrada la UX de retorno. Por eso solo AVISAN, no abortan.
+// Recommended payment vars have fallbacks (MP return URLs, default webhook URL),
+// so their absence only degrades UX: warn, don't abort.
 const recommendedPaymentEnvInProduction = [
     'DONATION_SUCCESS_URL',
     'DONATION_CANCEL_URL',
@@ -63,8 +58,7 @@ if (!parsedEnv.success) {
     process.exit(1);
 }
 
-// Validación de envs de pago en producción: las CRÍTICAS abortan (fail-fast), las
-// RECOMENDADAS (con fallback) solo avisan.
+// Production payment envs: critical ones abort, recommended ones only warn.
 if (process.env.NODE_ENV === 'production') {
     const missingRequiredPayment = requiredPaymentEnvInProduction.filter(
         (k) => !process.env[k]
@@ -121,12 +115,11 @@ export default {
         smtp_mail: process.env.SMTP_MAIL,
         smtp_pass: process.env.SMTP_PASS,
         name: process.env.SERVICE_NAME,
-        // Remitente ("From"). Con SES este NO es el usuario SMTP (que es una
-        // credencial), sino una dirección de tu dominio verificado, ej.
-        // "BankyBondy <hola@bankybondy.com>". Fallback al esquema viejo (Gmail).
+        // "From" sender: with SES this is a verified-domain address, not the SMTP
+        // user credential, e.g. "BankyBondy <hola@bankybondy.com>".
         from: process.env.EMAIL_FROM,
     },
-    // URL pública del sitio para los links de los emails (deep-link del digest).
+    // Public site URL for email links (digest deep-link).
     web_url: process.env.WEB_URL || 'https://bankybondy.com',
     paypal: {
         client_id: process.env.PAYPAL_CLIENT_ID,
@@ -149,21 +142,16 @@ export default {
         currency: process.env.MP_CURRENCY || 'ARS',
         price_standard: Number(process.env.MP_PRICE_STANDARD || 0),
         price_premium: Number(process.env.MP_PRICE_PREMIUM || 0),
-        // Objetivo en dólares por plan (se convierte a pesos con la cotización del día).
-        // ⚠️ HUÉRFANOS desde que los planes tienen fuente única: nadie los lee.
-        // Las MISMAS variables (`MP_USD_STANDARD` / `MP_USD_PREMIUM`) las lee
-        // ahora `modules/normalUser/subscriptionPlans.ts`, que es lo que usan a la
-        // vez el cobro, la acreditación y el endpoint de precios. Se dejan acá,
-        // sin borrar, sólo para no romper nada que los lea desde afuera del árbol;
-        // cambiarlos NO tiene ningún efecto. Se borran cuando se limpie config.
+        // Orphaned: the real source is modules/normalUser/subscriptionPlans.ts.
+        // Kept only so external readers don't break — changing these has no effect.
         usd_standard: Number(process.env.MP_USD_STANDARD || 8),
         usd_premium: Number(process.env.MP_USD_PREMIUM || 15),
         dollar_rate_type: process.env.MP_DOLLAR_RATE_TYPE || 'blue',
         fallback_rate: Number(process.env.MP_FALLBACK_RATE || 0),
         success_url: process.env.MP_SUCCESS_URL || process.env.DONATION_SUCCESS_URL,
         failure_url: process.env.MP_FAILURE_URL || process.env.DONATION_CANCEL_URL,
-        // Nunca mandar pendientes a la pantalla de éxito: un pending todavía no
-        // está acreditado por webhook. Fallback a la URL neutra de cancel/return.
+        // Never send pending payments to the success screen: not yet credited by
+        // webhook. Falls back to the neutral cancel/return URL.
         pending_url: process.env.MP_PENDING_URL || process.env.DONATION_CANCEL_URL,
         webhook_url:
             process.env.MP_WEBHOOK_URL ||

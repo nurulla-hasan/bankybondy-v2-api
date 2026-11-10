@@ -1,20 +1,9 @@
-/* Verifica la tanda B2 (Personas) en la base: los tres índices nuevos y el dato
- * `NormalUser.hasActiveBonds` sembrado y al día.
- *
- * Los índices: `autoIndex` de Mongoose los construye al arrancar y SI FALLA LO
- * HACE EN SILENCIO (ver checkUserIndexes.ts). Sin `personas_destacados`,
- * Destacados vuelve a ordenar a todos los usuarios en memoria en cada carga.
- *
- * NO importa modelos, a propósito: importar un modelo dispara su `autoIndex` al
- * conectar, y el script crearía lo mismo que tiene que verificar.
- *
- * Solo LEE. Correrlo recién cuando el log de la API muestre
- * `[vinculosVivos] backfill:` (antes, "sin campo" da distinto de 0 y es normal).
- * Un "falta encender/apagar" de 1 o 2 puede ser una escritura del mismo
- * instante: correrlo de nuevo; si persiste, es un bug.
- *
- * Uso (tras compilar):
- *   node dist/scripts/checkB2.js; echo FIN=$?     (0 = todo bien, 1 = algo falta)
+/* Verifies the B2 (Personas) indexes and the seeded NormalUser.hasActiveBonds.
+ * Mongoose autoIndex builds them at startup and fails SILENTLY (see
+ * checkUserIndexes.ts); without `personas_destacados`, Destacados sorts in memory.
+ * Read-only. Imports no models on purpose (importing triggers their autoIndex).
+ * Run once the API log shows `[vinculosVivos] backfill:`.
+ * Usage (after build): node dist/scripts/checkB2.js; echo FIN=$?   (0 = ok, 1 = missing)
  */
 import mongoose from 'mongoose';
 import config from '../app/config';
@@ -22,8 +11,8 @@ import { ENUM_BOND_REQUEST_STATUS } from '../app/modules/bondRequest/bondRequest
 
 /* eslint-disable no-console */
 
-// El filtro de normalUser/vinculosVivos.ts (FILTRO_VINCULO_VIVO), copiado para
-// no importar ese módulo, que importa los modelos.
+// Copy of FILTRO_VINCULO_VIVO (normalUser/vinculosVivos.ts), inlined to avoid
+// importing that module, which imports the models.
 const VIVO = {
     status: {
         $in: [
@@ -50,8 +39,8 @@ const main = async (): Promise<void> => {
     if (!db) throw new Error('sin conexión a la base');
     let mal = 0;
 
-    // Por FORMA de la clave y por prefijo, excluyendo parciales/sparse/collation:
-    // el mismo criterio de checkUserIndexes.ts, y por los mismos motivos.
+    // Match by key SHAPE and prefix, excluding partial/sparse/collation:
+    // same rule as checkUserIndexes.ts, for the same reasons.
     for (const [col, clave] of ESPERADOS) {
         const idx = await db.collection(col).indexes();
         const claves = Object.entries(clave);

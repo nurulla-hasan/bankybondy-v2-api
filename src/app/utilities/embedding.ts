@@ -1,9 +1,7 @@
 import OpenAI from 'openai';
 
-// Techo de tiempo, igual que isTextSafe.ts: los defaults del SDK (openai 6.45)
-// son 600 s y 2 reintentos, o sea hasta ~30 MINUTOS colgado por vínculo
-// publicado con OpenAI degradado, porque el alta espera el embedding. Con esto el
-// techo es ~30 s (dos intentos de 15) y después el alta falla con un error.
+// Hard time cap: SDK defaults (600 s, 2 retries) could stall signup for ~30 min
+// on a degraded OpenAI; this bounds it to ~30 s.
 const client = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY, // keep it secret in .env
     timeout: 15000,

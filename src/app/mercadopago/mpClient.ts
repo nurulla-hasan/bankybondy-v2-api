@@ -1,6 +1,5 @@
-/* Cliente configurado del SDK v2 de MercadoPago.
- * Se reutiliza en el servicio (creación de preferencias) y en el webhook
- * (consulta de pagos). El access token vive en config.mercadopago. */
+/* Configured MercadoPago SDK v2 client, shared by the service (preferences) and the
+ * webhook (payment lookups). The access token comes from config.mercadopago. */
 import { MercadoPagoConfig } from 'mercadopago';
 import config from '../config';
 

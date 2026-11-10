@@ -21,7 +21,7 @@ const getAllNotification = catchAsync(async (req, res) => {
     });
 });
 
-// Conteo de no vistas + última notificación (misma forma que emite el socket).
+// Unseen count + last notification (same shape the socket emits).
 const getUnseenCount = catchAsync(async (req, res) => {
     const result = await notificationService.getUnseenCount(req?.user);
 
@@ -43,7 +43,7 @@ const seeNotification = catchAsync(async (req, res) => {
         data: result,
     });
 });
-// Marca UNA notificación como vista (al abrir esa notificación puntual).
+// Marks ONE notification as seen (when opening that specific one).
 const seeOneNotification = catchAsync(async (req, res) => {
     const result = await notificationService.seeOneNotification(
         req?.user,
@@ -71,7 +71,7 @@ const deleteNoficiation = catchAsync(async (req, res) => {
     });
 });
 
-// Preferencias de silenciado por categoría (Tanda C).
+// Per-category mute preferences (Tanda C).
 const getPreferences = catchAsync(async (req, res) => {
     const result = await notificationService.getPreferences(req?.user);
     sendResponse(res, {
@@ -95,9 +95,8 @@ const updatePreferences = catchAsync(async (req, res) => {
     });
 });
 
-// Preview del digest semanal: lo manda a la PROPIA casilla del usuario que llama
-// (force = usa datos de muestra si no hay actividad real). Sirve para ver el
-// render real en el inbox. Solo puede mandárselo a sí mismo.
+// Digest preview: sends only to the CALLER's own inbox (force = sample data if
+// there is no real activity), so they can see the real render. Self-only.
 const digestPreview = catchAsync(async (req, res) => {
     const result = await digestService.sendDigestToUser(req?.user?.profileId, {
         force: true,
@@ -112,10 +111,9 @@ const digestPreview = catchAsync(async (req, res) => {
     });
 });
 
-// Baja del resumen/digest (List-Unsubscribe). PÚBLICO y token-firmado: el token
-// viaja en la URL del header del correo y es la única autorización (no hay login).
-// POST = one-click de Gmail (responde 200 sin cuerpo). GET = clic en un cliente →
-// página de confirmación simple. `unsubscribeFromDigest` nunca lanza (falla cerrada).
+// Digest unsubscribe (List-Unsubscribe). Public, token-signed: the token in the
+// email URL is the only auth. POST = Gmail one-click (200, no body); GET = simple
+// confirmation page. `unsubscribeFromDigest` never throws (fails closed).
 const digestUnsubscribe = async (req: Request, res: Response) => {
     const token = req.params.token || '';
     const result = await unsubscribeFromDigest(token);

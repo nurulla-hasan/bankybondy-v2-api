@@ -7,11 +7,9 @@ export interface IBondRating {
     bondLink: Types.ObjectId;
     want: string;
     offer: string;
-    // D.3 (Tanda 2): comentario breve opcional que acompana a la puntuacion.
+    // D.3: optional short comment that goes with the score.
     comment?: string;
-    // Tanda 2 (rating en SUSPENSO): la calificación NO impacta la reputación hasta
-    // que TODO el trueque cierra (todos marcan completado). Se crea en `false` y pasa
-    // a `true` en LOTE al transicionar el BondLink a Completed. Un trueque inconcluso
-    // deja sus ratings en `false` para siempre (no genera reputación).
+    // Held rating: no reputation impact until the WHOLE trade closes; created false and
+    // flipped to true in bulk on Completed. Unfinished trades stay false forever.
     applied?: boolean;
 }

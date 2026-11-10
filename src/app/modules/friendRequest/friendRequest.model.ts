@@ -27,14 +27,9 @@ FriendRequestSchema.index({ sender: 1 });
 FriendRequestSchema.index({ receiver: 1 });
 FriendRequestSchema.index({ status: 1 });
 
-// A lo sumo UNA solicitud PENDING por dirección (sender→receiver). Cierra la
-// carrera pura de doble-tap que el chequeo check-then-create del service no puede
-// (dos requests concurrentes pasan el findOne y crean dos). Índice PARCIAL sobre
-// status:Pending: al pasar a Accepted/Rejected la solicitud SALE del índice, así
-// que un mismo par puede volver a solicitarse legítimamente en el futuro. El
-// service captura el E11000 y responde "Request already exists". (Verificado
-// 23-jul con dedupeFriendRequests.js: 0 duplicados PENDING en la base → construye
-// limpio, sin migración.)
+// At most ONE pending request per direction; the partial index closes the double-tap
+// race the service's check-then-create can't. Accepted/Rejected leave the index,
+// so the same pair can request again later.
 FriendRequestSchema.index(
     { sender: 1, receiver: 1 },
     {

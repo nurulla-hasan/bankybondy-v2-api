@@ -2,8 +2,8 @@ import { Response } from 'express';
 import config from '../config';
 import { creditDonation } from './creditPayment';
 
-// Flujo de captura por redirect del navegador. La acreditación real vive en
-// creditDonation (idempotente), compartida con el webhook firmado.
+// Browser-redirect capture flow. The real crediting lives in creditDonation
+// (idempotent) and is shared with the signed webhook.
 const handleDonationPaymentSuccess = async (
     res: Response,
     donationId: string,

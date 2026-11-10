@@ -8,8 +8,8 @@ const createRecommendedUsers = async (users: IRecommendedUser[]) => {
 };
 
 const getRecommendedUsers = async (query: Record<string, unknown>) => {
-    // PII: NO exponer email/phone de terceros recomendados. Hard-select (sin
-    // `.fields()` para que el cliente no pueda re-pedir email con `?fields=email`).
+    // PII: never expose recommended users' email/phone. Hard-select and no `.fields()`,
+    // so the client can't re-request them with `?fields=email`.
     const AdminQuery = new QueryBuilder(
         RecommendedUser.find()
             .select('name skill recommendBy createdAt')

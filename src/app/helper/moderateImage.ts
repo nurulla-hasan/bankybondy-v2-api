@@ -1,30 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Moderación visual de una imagen (portada de audio) con OpenAI omni-moderation.
+/* Image moderation for the audio cover with OpenAI omni-moderation.
  *
- * La moderación de audio solo mira el transcript; la portada (`cover_image`) la
- * sube el usuario y se muestra en todo el feed sin ningún chequeo → una imagen
- * NSFW pasaba con un audio lícito. Acá la moderamos por URL.
- *
- * Semántica del veredicto: `checked` dice si se PUDO verificar. Ante un error
- * técnico (OpenAI caído / 429 / timeout / imagen no soportada) devolvemos
- * `{ checked: false }` en vez de aprobar a ciegas: el llamador decide (para el
- * audio, NO aprobar y reintentar — misma política que el análisis de audio). Así
- * un fallo transitorio no publica una portada sin moderar de forma permanente.
- *
- * `interpretImageModeration` es PURA → testeable en runTests.
+ * `checked: false` means the verdict could not be obtained (error/429/timeout);
+ * the caller decides (audio refuses and retries) so a transient failure never
+ * publishes an unmoderated cover permanently. `interpretImageModeration` is pure.
  */
 import OpenAI from 'openai';
 import { errorLogger } from '../shared/logger';
 
-// Cliente PEREZOSO: no se instancia al importar el módulo, para que el test pueda
-// importar `interpretImageModeration` sin `OPENAI_API_KEY` (el SDK v6 lanza si
-// falta). En runtime la key es obligatoria de hecho (otros módulos instancian
-// OpenAI eager al bootear), así que acá siempre estará.
+// Lazy client: not instantiated on import, so tests can load
+// `interpretImageModeration` without `OPENAI_API_KEY` (SDK v6 throws if missing).
 let client: OpenAI | null = null;
 const getClient = (): OpenAI => {
-    // Techo de tiempo, igual que isTextSafe.ts y embedding.ts: con los defaults
-    // del SDK (600 s y 2 reintentos) una portada colgada frenaba hasta ~30 min el
-    // barrido de audio, que es serial, para todos.
+    // Time cap: SDK defaults (600s, 2 retries) could stall the serial audio sweep
+    // for ~30 min on one hung cover.
     if (!client)
         client = new OpenAI({
             apiKey: process.env.OPENAI_API_KEY,
@@ -37,8 +26,8 @@ const getClient = (): OpenAI => {
 export type ImageVerdict = { safe: boolean; reason?: string };
 export type ImageModerationResult = { checked: boolean } & ImageVerdict;
 
-// Interpreta el resultado de `openai.moderations.create`. flagged=true → unsafe
-// con las categorías marcadas como motivo. Resultado ausente/raro → safe.
+// Interprets `openai.moderations.create` output. flagged=true → unsafe with the
+// flagged categories as reason. Missing/odd result → safe.
 export const interpretImageModeration = (result: any): ImageVerdict => {
     const r = result?.results?.[0];
     if (!r || typeof r.flagged !== 'boolean') return { safe: true };
@@ -53,16 +42,15 @@ export const interpretImageModeration = (result: any): ImageVerdict => {
 export const moderateImageUrl = async (
     url: string
 ): Promise<ImageModerationResult> => {
-    // Sin URL no hay imagen que moderar (cover es required; esto es defensivo).
+    // No URL means nothing to moderate (cover is required; defensive).
     if (!url || typeof url !== 'string') return { checked: true, safe: true };
     try {
         const result = await getClient().moderations.create({
             model: 'omni-moderation-latest',
             input: [{ type: 'image_url', image_url: { url } }],
         });
-        // 200 pero sin un veredicto válido (shape inesperado): tratar como NO
-        // verificada (fail-closed), no como segura — así el llamador reintenta en
-        // vez de publicar una portada sin moderar de verdad.
+        // 200 without a valid verdict (unexpected shape): treat as NOT verified
+        // (fail-closed) so the caller retries instead of publishing it.
         const r = (result as any)?.results?.[0];
         if (!r || typeof r.flagged !== 'boolean') {
             errorLogger.error('[moderateImage] respuesta sin veredicto válido');

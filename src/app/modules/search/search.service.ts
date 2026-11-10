@@ -9,20 +9,18 @@ import { User } from '../user/user.model';
 import { Skill } from '../skill/skill.model';
 import { getBlockedObjectIdsFor } from '../userBlock/userBlock.service';
 
-// Escapa los metacaracteres de expresion regular para evitar inyeccion/errores
-// al construir el RegExp a partir del termino de busqueda del usuario.
+// Escapes regex metacharacters so the user's term can't inject or break the RegExp.
 const escapeRegex = (input: string): string =>
     input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const EMPTY_RESULT = { people: [], bonds: [], audios: [] };
 
-// Busqueda global ligera: busca en personas (NormalUser), bonos (BondRequest) y
-// audios (Audio) en paralelo, con proyecciones, .lean() y un tope duro por
-// categoria. Nunca lanza sobre entrada vacia; nunca usa agregaciones pesadas.
+// Lightweight global search over people, bonds and audios in parallel, with projections,
+// `.lean()` and a hard cap per category. Never throws on empty input; no heavy aggregations.
 const globalSearch = async (profileId: string, rawQuery?: unknown) => {
     const q = typeof rawQuery === 'string' ? rawQuery.trim() : '';
 
-    // Umbral minimo: no consultamos la base con terminos de 0-1 caracteres.
+    // Minimum threshold: don't query the DB for 0-1 char terms.
     if (q.length < 2) {
         return EMPTY_RESULT;
     }
@@ -30,15 +28,13 @@ const globalSearch = async (profileId: string, rawQuery?: unknown) => {
     const regex = new RegExp(escapeRegex(q), 'i');
     const LIMIT = 6;
 
-    // Excluye a las personas bloqueadas (en ambos sentidos) de los resultados.
+    // Excludes people blocked in either direction.
     const blockedIds = await getBlockedObjectIdsFor(profileId);
     const callerId = new Types.ObjectId(profileId);
 
-    // Perfiles OCULTOS de Personas (listedInPeople:false) no deben aparecer en
-    // NINGUNA rama del buscador: ni por nombre (personas), ni a través de sus
-    // bonos o audios. El matcheo es OTRO motor y NO se ve afectado: la persona
-    // sigue activa y sigue matcheando. Se calcula una vez el set de ids ocultos y
-    // se excluye en las tres consultas.
+    // Profiles hidden from People (listedInPeople:false) must not show in ANY branch:
+    // not by name, nor through their bonds or audios. Matching is another engine and is
+    // unaffected. Computed once and excluded from the three queries.
     const hiddenUserDocs = await NormalUser.find({ listedInPeople: false })
         .select('_id')
         .lean();
@@ -46,16 +42,14 @@ const globalSearch = async (profileId: string, rawQuery?: unknown) => {
         (d) => d._id
     );
 
-    // Excluir a los BANEADOS POR ADMIN (User.isBlocked): una acción de moderación
-    // debe sacarlos del buscador igual que de Personas (getAllUser) y del matcheo
-    // (C.5). El search era la única superficie de descubrimiento que faltaba.
-    // `User.profileId` es el id de NormalUser (mismo espacio que _id/user de abajo).
+    // Admin-banned users (User.isBlocked) must leave search too: moderation has to apply
+    // as in People and matching. `User.profileId` is the NormalUser id.
     const adminBlockedIds = await User.find({ isBlocked: true }).distinct(
         'profileId'
     );
 
-    // Personas tambien por nombre de skill (aditivo, ligero): pre-resolvemos los
-    // ids de skills que matchean y los sumamos al $or junto al nombre.
+    // People also match by skill name (additive, light): pre-resolve matching skill
+    // ids and add them to the same $or as the name.
     const matchedSkills = await Skill.find({ name: regex })
         .select('_id')
         .lean();
@@ -65,8 +59,8 @@ const globalSearch = async (profileId: string, rawQuery?: unknown) => {
     }
 
     const [people, bonds, audios] = await Promise.all([
-        // 1) Personas: por nombre o por nombre de skill. NUNCA se expone el email.
-        //    Se excluyen bloqueados Y ocultos (listedInPeople:false).
+        // 1) People by name or skill name. Email is NEVER exposed.
+        //    Blocked and hidden (listedInPeople:false) users are excluded.
         NormalUser.find({
             $or: peopleOr,
             _id: {
@@ -78,8 +72,7 @@ const globalSearch = async (profileId: string, rawQuery?: unknown) => {
             .limit(LIMIT)
             .lean(),
 
-        // 2) Bonos activos y disponibles (no en pausa, no enlazados). Se excluyen
-        //    los bonos cuyo dueño se ocultó de Personas (no debe aparecer en búsquedas).
+        // 2) Active, available bonds (not paused, not linked). Bonds of hidden owners excluded.
         BondRequest.find({
             $or: [
                 { offer: { $regex: regex } },
@@ -101,7 +94,7 @@ const globalSearch = async (profileId: string, rawQuery?: unknown) => {
             .limit(LIMIT)
             .lean(),
 
-        // 3) Audios aprobados y no bloqueados. Se excluyen los de dueños ocultos.
+        // 3) Approved, non-blocked audios. Audios of hidden owners excluded.
         Audio.find({
             $or: [
                 { title: { $regex: regex } },
@@ -122,7 +115,7 @@ const globalSearch = async (profileId: string, rawQuery?: unknown) => {
             .lean(),
     ]);
 
-    // Firma las cover_image de los audios (CloudFront) igual que el resto del app.
+    // Signs audio covers (CloudFront) like the rest of the app.
     const signedAudios = (audios as Array<{ cover_image?: string }>).map(
         (audio) => ({
             ...audio,

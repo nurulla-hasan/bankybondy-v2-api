@@ -45,7 +45,7 @@ const getConversationMediaFiles = catchAsync(async (req, res) => {
     });
 });
 
-// B.7 (Tanda 2): ocultar una conversacion solo para el usuario actual.
+// B.7: hide a conversation for the current user only.
 const hideConversation = catchAsync(async (req, res) => {
     const result = await ConversationService.setConversationHidden(
         req?.user?.profileId,
@@ -60,7 +60,7 @@ const hideConversation = catchAsync(async (req, res) => {
     });
 });
 
-// B.7 (Tanda 2): des-ocultar (revertir) una conversacion para el usuario actual.
+// B.7: unhide (revert) a conversation for the current user.
 const unhideConversation = catchAsync(async (req, res) => {
     const result = await ConversationService.setConversationHidden(
         req?.user?.profileId,

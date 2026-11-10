@@ -19,9 +19,9 @@ const userBlockSchema = new Schema<IUserBlock>(
     }
 );
 
-// Un usuario no puede bloquear dos veces al mismo (par unico).
+// A user cannot block the same target twice (unique pair).
 userBlockSchema.index({ blocker: 1, blocked: 1 }, { unique: true });
-// Consultas de "quienes me bloquearon a mi".
+// "Who blocked me" queries.
 userBlockSchema.index({ blocked: 1 });
 
 const UserBlock = model<IUserBlock>('UserBlock', userBlockSchema);

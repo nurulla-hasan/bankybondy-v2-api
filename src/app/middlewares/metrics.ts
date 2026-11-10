@@ -12,7 +12,7 @@ const httpDuration = new client.Histogram({
 });
 register.registerMetric(httpDuration);
 
-// ── Matcheo: serving acotado y read model por participante ──────────────────
+// ── Matching: bounded serving and per-participant read model ────────────────
 export const bondMatchServeDuration = new client.Histogram({
     name: 'bond_match_serve_duration_seconds',
     help: 'Duración de la lectura de matches (legacy vs feed)',
@@ -81,10 +81,10 @@ export const metricsMiddleware = (
 };
 
 export const metricsHandler = async (req: Request, res: Response) => {
-    // Restringir por token opcional (defensa básica); a nivel de red,
-    // exponer /metrics solo a la red interna / scraper de Prometheus.
+    // Optional token gate (basic defense); at the network level expose /metrics
+    // only to the internal network / Prometheus scraper.
     const token = process.env.METRICS_TOKEN;
-    // fail-closed: sin token configurado NO se expone nada (404 ni revela que existe).
+    // fail-closed: with no token configured nothing is exposed (404 hides it).
     if (!token) {
         res.status(404).end();
         return;

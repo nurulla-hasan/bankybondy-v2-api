@@ -10,7 +10,7 @@ const superAdminData = {
 };
 
 const seedSuperAdmin = async () => {
-    // check when database is connected , we will check is there any user who is super admin
+    // Seed only when no super admin exists.
     const superAdminExits = await User.findOne({ role: USER_ROLE.superAdmin });
     if (superAdminExits) {
         console.log('Admin already exits');

@@ -30,10 +30,10 @@ const capturePayPalPayment = async (req: Request, res: any) => {
         const purchaseUnit = orderResponse.result.purchase_units[0];
         const id = purchaseUnit.custom_id || 'UNKNOWN_CAMPAIGN';
         const paymentPurpose = purchaseUnit.reference_id || 'UNKNOWN_PURPOSE';
-        // Idempotencia con el webhook: PAYMENT.CAPTURE.COMPLETED usa el CAPTURE id
-        // (resource.id). Acá `captureResponse.result.id` es el ORDER id (distinto),
-        // por lo que ambos flujos creaban Transaction distintas y NO deduplicaban.
-        // Usamos el capture id real (con fallback defensivo al order id).
+        // Idempotency with the webhook: PAYMENT.CAPTURE.COMPLETED keys on the
+        // CAPTURE id (resource.id), while `captureResponse.result.id` is the ORDER
+        // id — using that made both flows create distinct rows and never dedupe.
+        // Use the real capture id (defensive fallback to the order id).
         const captureId =
             captureResponse.result?.purchase_units?.[0]?.payments?.captures?.[0]
                 ?.id;
@@ -50,7 +50,7 @@ const capturePayPalPayment = async (req: Request, res: any) => {
                 amount
             );
         } else {
-            // Propósito desconocido: no colgar la respuesta, redirigir a cancel.
+            // Unknown purpose: don't hang the response, redirect to cancel.
             return res.redirect(`${config.paypal.donation_cancel_url}`);
         }
     } catch (error) {

@@ -9,12 +9,10 @@ import userValidations from './user.validation';
 
 const router = Router();
 
-// SEGURIDAD (P0/P1): estas tres rutas son PÚBLICAS y emiten/consumen el OTP de
-// 6 dígitos (verificación de alta). Sin rate limit, el código era
-// brute-forceable dentro de su ventana y el registro/reenvío podían spamear
-// mails. Se les aplica el mismo authLimiter que ya usan las rutas de /auth
-// (login, forget/reset). NOTA (pendiente 2da tanda): sumar contador de intentos
-// + lockout por cuenta e invalidar el código tras N fallos.
+// SECURITY (P0/P1): these three routes are PUBLIC and issue/consume the 6-digit
+// OTP, so without a rate limit the code was brute-forceable and register/resend
+// could spam emails. They use the same authLimiter as /auth. TODO: add per-account
+// attempt counter + lockout and invalidate the code after N failures.
 router.post(
     '/register-user',
     authLimiter,

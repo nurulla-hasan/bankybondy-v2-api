@@ -3,44 +3,23 @@ import OpenAI from 'openai';
 import httpStatus from 'http-status';
 import AppError from '../error/appError';
 
-// TECHO EXPLÍCITO DE TIEMPO. El SDK sin `timeout` espera MINUTOS y reintenta
-// solo, y estas llamadas corren ANTES de guardar CADA mensaje del chat y ANTES de
-// publicar cada vínculo. Con OpenAI degradado, todo eso quedaba colgado minutos
-// mientras la burbuja del que escribió ya decía "enviado".
-//
-// QUÉ HACE EL TECHO EN CADA CAMINO — y esto lo corrigió el panel del 26/9, porque
-// una versión anterior de este comentario afirmaba lo que el código NO hace:
-//
-//   · VÍNCULOS y AUDIO (`isTextSafeBatch` / `assertTextAllowed`): fail-CLOSED
-//     amable y retryable, como declara la Opción A de abajo. El techo hace que ese
-//     rechazo llegue en segundos en vez de en minutos. Ahí el comentario viejo
-//     era cierto.
-//   · CHAT (`isMessageSafe`, que llama `handleChat`): **falla ABIERTO**. El chat
-//     sólo emite 422 `message_blocked` y el front sólo maneja ese 422 — no hay
-//     ningún camino de 503 ni de reintento. O sea: con el techo, un OpenAI lento
-//     pasa a fail-OPEN *antes* que sin él. Es deliberado y está asumido: en este
-//     producto perder un mensaje pesa más que dejar pasar uno sin moderar, y cada
-//     caso queda logueado como `msg-fail-open`.
-//
-// Y el número real es ~30 s, no 15: el SDK REINTENTA los timeouts, así que con
-// `maxRetries: 1` el techo total son dos intentos de 15 s.
+// Explicit time cap: the SDK default waits minutes and retries, and these calls
+// run before saving every chat message and publishing every bond. Total is ~30s
+// (two 15s attempts with maxRetries: 1). Bonds/audio fail closed and retryable;
+// chat (`isMessageSafe`) fails OPEN by design.
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     timeout: 15000,
     maxRetries: 1,
 });
 
-/* ============================================================================
- * Bankybondy · isTextSafe — 3 capas de Trust & Safety
- *  Capa 1  Lista dura LOCAL bilingue (ES+EN). Solo terminos/frases inequivocos
- *          y graves + DINERO por FRASES (nunca palabras sueltas).
- *  Capa 2  Moderacion OpenAI (omni-moderation-latest), red multilingue.
- *  Capa 3  Intencion (gpt-4o-mini) con salida ESTRUCTURADA (JSON).
- *  Politica de fallo (Opcion A): si la MODERACION no se puede verificar ->
- *          fail-CLOSED amable (retryable); la INTENCION puede fail-OPEN.
- *  Eficiencia: batch (offer+want en 1 llamada) + cache en memoria.
- *  Observabilidad: log de cada decision.
- * ========================================================================== */
+/* isTextSafe — 3 Trust & Safety layers:
+ *  1. Local bilingual hard list (ES+EN), money only as phrases.
+ *  2. OpenAI moderation (multilingual net).
+ *  3. Intent via gpt-4o-mini with structured JSON output.
+ * Failure policy: moderation unavailable → fail-closed (retryable); intent may
+ * fail-open. Batched calls plus in-memory cache.
+ */
 
 export interface SafetyResult {
     safe: boolean;
@@ -50,12 +29,10 @@ export interface SafetyResult {
 }
 
 /**
- * Lanza el error correcto según el verdict de moderación:
- *  - retryable (la moderación NO se pudo verificar → fail-closed): 503 con el
- *    mensaje de reintento. NO se dice "no permitido" porque el contenido puede
- *    estar perfecto; es un problema TRANSITORIO del servicio.
- *  - unsafe real: 400 "<label> is not allowed: <motivo>".
- *  - safe (o null/undefined): no hace nada.
+ * Throws the right error for a moderation verdict.
+ * - retryable (moderation unverifiable → fail-closed): 503, transient service issue.
+ * - real unsafe: 400 "<label> is not allowed: <reason>".
+ * - safe or null/undefined: no-op.
  */
 export const assertTextAllowed = (
     verdict: SafetyResult | null | undefined,
@@ -365,14 +342,10 @@ export async function isTextSafe(text: string): Promise<SafetyResult> {
     return r;
 }
 
-/* ----------------------------------------------------------------------------
- * isMessageSafe — versión LIVIANA y GRATIS para el chat.
- *  - Capa 1 (lista dura local) + Capa 2 (moderación OpenAI). SIN la capa 3 de
- *    intención (gpt-4o-mini, la única paga) → costo ~US$0.
- *  - Falla ABIERTO: si la moderación de OpenAI no responde, se PERMITE el
- *    mensaje (la lista dura local ya cubre lo más grave) para NO cortar el chat.
- *  - Caché con prefijo propio ('msg:') para NO mezclarse con la de vínculos: un
- *    "safe" de 2 capas nunca debe hacer que un vínculo salte su capa de intención.
+/* isMessageSafe — lightweight, free path for chat.
+ * Layers 1 and 2 only (no paid intent layer) → ~US$0.
+ * Fails OPEN if moderation is unavailable, to avoid blocking the chat.
+ * Cache uses the 'msg:' prefix so a 2-layer "safe" never skips intent checks.
  * -------------------------------------------------------------------------- */
 export async function isMessageSafe(text: string): Promise<SafetyResult> {
     const norm = normalize(text);
@@ -382,7 +355,7 @@ export async function isMessageSafe(text: string): Promise<SafetyResult> {
     const cached = cacheGet(key);
     if (cached) return cached;
 
-    // Capa 1: lista dura local (gratis, siempre disponible).
+    // Layer 1: local hard list (free, always available).
     const hard = hardCheck(norm);
     if (hard) {
         const r: SafetyResult = {
@@ -395,7 +368,7 @@ export async function isMessageSafe(text: string): Promise<SafetyResult> {
         return r;
     }
 
-    // Capa 2: moderación OpenAI (gratis). Fail-OPEN ante error/caída.
+    // Layer 2: OpenAI moderation (free). Fail-open on error/outage.
     try {
         const mod = await openai.moderations.create({
             model: 'omni-moderation-latest',
@@ -413,7 +386,7 @@ export async function isMessageSafe(text: string): Promise<SafetyResult> {
             return r;
         }
     } catch {
-        // No romper el chat si la moderación no está disponible.
+        // Don't break chat when moderation is unavailable.
         logDecision('msg-fail-open', text, { safe: true });
         return { safe: true };
     }

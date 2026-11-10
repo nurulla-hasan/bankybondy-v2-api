@@ -6,8 +6,8 @@ import { ConsumidorValidations } from './consumidor.validation';
 
 const router = express.Router();
 
-// PÚBLICO y sin `auth`, a propósito: la Disp. 954/2025 prohíbe exigir
-// registración previa para el botón de arrepentimiento y el de baja.
+// Public and deliberately unauthenticated: Disp. 954/2025 forbids requiring
+// prior signup for the "arrepentimiento" and cancellation buttons.
 router.post(
     '/solicitud',
     consumidorLimiter,

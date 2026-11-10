@@ -14,12 +14,10 @@ import {
 
 const router = express.Router();
 
-// Create Audio
 router.post(
     '/create-audio',
     auth(USER_ROLE.user),
-    // EC3 (Tanda 0): rate-limit por usuario ANTES de subir a S3 / disparar
-    // ffmpeg+OpenAI. Frena abuso y costos descontrolados.
+    // EC3 (Tanda 0): per-user rate limit before S3 upload and ffmpeg+OpenAI cost.
     audioUploadLimiter,
     uploadFile(),
     parseMultipartData,
@@ -27,9 +25,8 @@ router.post(
     AudioController.createAudio
 );
 
-// Subida en dos pasos: primero se stagean los archivos (uno o los dos), luego
-// create-audio recibe las URLs en JSON. delete-upload limpia lo que el diálogo
-// descartó antes de publicar.
+// Two-step upload: stage files first, then create-audio receives the URLs as JSON.
+// delete-upload cleans up files the dialog discarded before publishing.
 router.post(
     '/upload-audio',
     auth(USER_ROLE.user),
@@ -43,7 +40,6 @@ router.post(
     AudioController.deleteUploadedAudioFiles
 );
 
-// Get All Audios
 router.get(
     '/all-audios',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
@@ -51,30 +47,27 @@ router.get(
 );
 router.get('/my-audios', auth(USER_ROLE.user), AudioController.getMyAudios);
 
-// D.5 (Tanda 2): polling del estado de moderacion asincrona de un audio propio.
+// D.5 (Tanda 2): poll async moderation status of one of your audios.
 router.get(
     '/moderation-status/:audioId',
     auth(USER_ROLE.user),
     AudioController.getModerationStatus
 );
 
-// Charlas publicas de un usuario (para su pagina de perfil). Prefijo estatico
-// distinto (/by-user/:userId) para no colisionar con /single-audio/:audioId ni
-// con las rutas /:audioId/feedback.
+// Public talks of a user (profile page). Static prefix /by-user/:userId avoids
+// colliding with /single-audio/:audioId and /:audioId/feedback.
 router.get(
     '/by-user/:userId',
     auth(USER_ROLE.user),
     AudioController.getAudiosByUser
 );
 
-// Get Audio by ID
 router.get(
     '/single-audio/:audioId',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
     AudioController.getAudioById
 );
 
-// Update Audio
 router.patch(
     '/update-audio/:audioId',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
@@ -84,7 +77,6 @@ router.patch(
     AudioController.updateAudio
 );
 
-// Delete Audio
 router.delete(
     '/delete-audio/:audioId',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
@@ -97,12 +89,12 @@ router.post(
     AudioController.giveRating
 );
 
-// Sistema de feedback del oyente (comentario + feeling tags).
-// Vocabulario de feeling tags (publico).
+// Listener feedback system (comment + feeling tags).
+// Feeling tags vocabulary (public).
 router.get('/feeling-tags', AudioController.getFeelingTags);
 
-// E0: registrar una escucha CALIFICADA. El player la llama al cruzar el umbral
-// (≥30s o ≥40%); el server valida, deduplica por día y hace real el totalPlay.
+// E0: record a QUALIFIED listen. The player calls it past the threshold (≥30s or
+// ≥40%); the server validates, dedupes per day and makes totalPlay real.
 router.post(
     '/:audioId/listen',
     auth(USER_ROLE.user),
@@ -111,7 +103,7 @@ router.post(
     AudioController.recordListen
 );
 
-// Upsert del feedback propio para un audio (usuario autenticado).
+// Upsert your own feedback for an audio (authenticated user).
 router.post(
     '/:audioId/feedback',
     auth(USER_ROLE.user),
@@ -119,20 +111,17 @@ router.post(
     AudioController.giveFeedback
 );
 
-// Listado paginado del feedback de un audio + agregados (publico).
-// `optionalAuth`: la ruta sigue siendo PÚBLICA (sin sesión responde igual), pero
-// si quien mira está logueado se lo identifica para poder ocultar los comentarios
-// de usuarios bloqueados. El service ya tenía ese filtro escrito, condicionado a
-// un `viewerId` que nunca llegaba porque no había ningún middleware de auth acá.
+// Paginated feedback listing plus aggregates (public).
+// `optionalAuth` keeps the route public but identifies logged-in viewers so
+// blocked users' comments can be hidden (the service needed that `viewerId`).
 router.get(
     '/:audioId/feedback',
     optionalAuth(),
     AudioController.getAudioFeedback
 );
 
-// D.5 (Admin): endpoints de moderacion de audios para el panel de administracion.
-// Listado sin filtros forzados (todos los estados/bloqueados), bloqueo/desbloqueo
-// reversible y eliminacion definitiva.
+// D.5 (Admin): audio moderation endpoints for the admin panel — unfiltered listing,
+// reversible block/unblock and permanent deletion.
 router.get(
     '/admin/all-audios',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),

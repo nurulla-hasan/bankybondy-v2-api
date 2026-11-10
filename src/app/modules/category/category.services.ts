@@ -6,7 +6,6 @@ import Category from './category.model';
 import { deleteFileFromS3 } from '../../helper/deleteFromS3';
 import QueryBuilder from '../../builder/QueryBuilder';
 
-// create category into db
 const createCategoryIntoDB = async (payload: ICategory) => {
     const category = await Category.findOne({
         name: payload.name,
@@ -14,9 +13,8 @@ const createCategoryIntoDB = async (payload: ICategory) => {
     });
     if (category) {
         if (payload.category_image) {
-            // Fix: era `deleteCategoryFromDB(url)` (función equivocada) sin await →
-            // `findById(url)` = CastError → unhandledRejection → caía TODA la API.
-            // Ahora borra el archivo huérfano de S3 con la función correcta, awaited.
+            // Was `deleteCategoryFromDB(url)` (wrong function) unawaited -> CastError ->
+            // unhandledRejection took the whole API down. Now awaits the right S3 delete.
             await deleteFileFromS3(payload.category_image);
         }
         throw new AppError(
@@ -76,7 +74,6 @@ const getSingleCategory = async (id: string) => {
     return category;
 };
 
-// delete category
 const deleteCategoryFromDB = async (categoryId: string) => {
     const category = await Category.findById(categoryId);
     if (!category) {

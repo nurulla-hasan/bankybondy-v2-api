@@ -1,36 +1,7 @@
 /* eslint-disable no-console */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* VERIFICACIÓN DE LA PRESENCIA CONTRA UN REDIS REAL.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * POR QUÉ EXISTE
- *
- * `presence.ts` se reescribió ENTERO y toda su corrección descansa en CINCO
- * scripts Lua que, hasta este archivo, **nunca se habían ejecutado**. Ni una vez.
- * El typecheck no mira adentro de un string, y los 275 tests del gate son
- * funciones puras que no tocan Redis.
- *
- * Es exactamente la misma clase de riesgo que en Mongo destapó el bug de
- * `matchesGen` —lógica razonada y nunca corrida— y esa clase ya demostró que
- * muerde. Acá el costo de equivocarse es más alto todavía: un contador mal llevado
- * deja gente marcada online para siempre, o marca offline a alguien conectado.
- *
- * NO se prueba "que Redis funcione": se prueban LAS INVARIANTES del diseño, que
- * son las que el panel de refutadores atacó una por una.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * CÓMO SE CORRE
- *
- *   # contra un Redis efímero que se levanta y se tira solo:
- *   #   npm i --no-save redis-memory-server
- *   node dist/scripts/verificarContraRedis.js
- *
- *   # o contra un Redis de verdad (staging o el entorno de carga; NUNCA
- *   # producción, porque esto BORRA las claves de presencia):
- *   VERIFY_REDIS_URL=redis://host:6379 VERIFY_REDIS_BORRAR=si-este-redis-es-descartable node dist/scripts/verificarContraRedis.js
- *
- * NO se agrega al gate: el gate tiene que poder correr sin infraestructura.
- */
+/* Verifies presence invariants against a real Redis; the five Lua scripts are never
+ * exercised by pure-function tests. Optional run; point VERIFY_REDIS_URL at a disposable instance. */
 import { createClient } from 'redis';
 
 let pass = 0;
@@ -46,12 +17,9 @@ const chequear = (nombre: string, cond: boolean, detalle?: string) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOS SCRIPTS, COPIADOS TAL CUAL DE presence.ts.
-//
-// Se copian a propósito en vez de importarlos: `presence.ts` los tiene privados
-// y exportarlos sólo para el test cambiaría el módulo para acomodar la prueba.
-// El precio es que pueden divergir — por eso el último grupo COMPARA el texto de
-// estos scripts contra el archivo real y falla si alguien tocó uno solo.
+// The scripts, copied verbatim from presence.ts: they are private there, and
+// exporting them just for a test would reshape the module. The cost is drift, so
+// the last group compares this text against the real file and fails on any change.
 // ─────────────────────────────────────────────────────────────────────────────
 const LUA_ENTRA = `
 local agrego = redis.call('SADD', KEYS[1], ARGV[1])
@@ -127,13 +95,13 @@ const limpiar = async () => {
     await redis.del(ONLINE);
 };
 
-/** Estado legible, para las aserciones. */
+/** Readable state for the assertions. */
 const estado = async () => ({
     online: (await redis.sMembers(ONLINE)).sort(),
     conexiones: await redis.hGetAll(CONEX),
 });
 
-// ── 1. Alta y baja: el caso simple, y que el contador cuente INSTANCIAS ─────
+// ── 1. Join and leave: the counter counts INSTANCES, not sockets ───────────
 const grupoAltaBaja = async () => {
     console.log('\n── Alta y baja (el contador cuenta INSTANCIAS, no sockets)');
     await limpiar();
@@ -166,7 +134,7 @@ const grupoAltaBaja = async () => {
     );
 };
 
-// ── 2. El candado exactamente-una-vez (la carrera de las dos pestañas) ─────
+// ── 2. The exactly-once lock (the two-tabs race) ───────────────────────────
 const grupoCandado = async () => {
     console.log('\n── El candado exactamente-una-vez (SADD/SREM adentro del script)');
     await limpiar();
@@ -178,10 +146,10 @@ const grupoCandado = async () => {
         repetida === 0 && (await estado()).conexiones.u1 === '1'
     );
 
-    // LA CARRERA QUE MOTIVÓ EL CANDADO: dos sockets de la misma instancia se
-    // caen en el mismo tick, los dos handlers leen `room.size === 0` y los dos
-    // intentan restar. Sólo uno tiene que lograrlo.
-    await correr(LUA_ENTRA, [inst('B'), CONEX, ONLINE], ['u1']); // otra instancia
+    // The race that motivated the lock: two sockets of the same instance drop in the
+    // same tick, both handlers read `room.size === 0` and both try to decrement.
+    // Only one of them may succeed.
+    await correr(LUA_ENTRA, [inst('B'), CONEX, ONLINE], ['u1']); // another instance
     const bajas = await Promise.all([
         correr(LUA_SALE, [inst('A'), CONEX, ONLINE], ['u1']),
         correr(LUA_SALE, [inst('A'), CONEX, ONLINE], ['u1']),
@@ -197,7 +165,7 @@ const grupoCandado = async () => {
     );
 };
 
-// ── 3. El drenaje por SPOP, y el agujero del `del` que se sacó ──────────────
+// ── 3. Draining via SPOP, and the `del` hole that was removed ──────────────
 const grupoDrenaje = async () => {
     console.log('\n── El drenaje de una instancia muerta (SPOP por lotes)');
     await limpiar();
@@ -205,7 +173,7 @@ const grupoDrenaje = async () => {
     for (let i = 0; i < 5; i++) {
         await correr(LUA_ENTRA, [inst('A'), CONEX, ONLINE], [`u${i}`]);
     }
-    // u0 también está en B: no tiene que quedar offline al drenar A.
+    // u0 is also in B: it must not go offline when A drains.
     await correr(LUA_ENTRA, [inst('B'), CONEX, ONLINE], ['u0']);
 
     const n = await correr(LUA_DRENA_LOTE, [inst('A'), CONEX, ONLINE], ['2']);
@@ -234,7 +202,7 @@ const grupoDrenaje = async () => {
     );
 };
 
-// ── 4. El lease del líder ──────────────────────────────────────────────────
+// ── 4. The leader lease ────────────────────────────────────────────────────
 const grupoLider = async () => {
     console.log('\n── El lease del líder (uno y sólo uno)');
     await limpiar();
@@ -251,8 +219,8 @@ const grupoLider = async () => {
     const ttl = await redis.ttl(LIDER);
     chequear('el lease tiene TTL (no queda para siempre)', ttl > 0 && ttl <= 120);
 
-    // `actual == false` es el test de nil de Lua: si estuviera mal, nadie podría
-    // tomar el lease NUNCA y el barrido no correría en toda la flota.
+    // `actual == false` is Lua's nil test: if it were wrong nobody could ever take
+    // the lease and the sweep would never run across the fleet.
     await redis.del(LIDER);
     const trasVencer = await correr(LUA_LIDER, [LIDER], ['B', '120']);
     chequear(
@@ -261,12 +229,12 @@ const grupoLider = async () => {
     );
 };
 
-// ── 5. La limpieza de arranque, y su carrera ───────────────────────────────
+// ── 5. Startup cleanup, and its race ──────────────────────────────────────
 const grupoLimpieza = async () => {
     console.log('\n── La limpieza de arranque (atómica)');
     await limpiar();
 
-    // Residuo del deploy: gente en online_users sin que nadie reporte conexiones.
+    // Deploy residue: users in online_users with nobody reporting connections.
     await redis.sAdd(ONLINE, ['viejo1', 'viejo2']);
     await redis.sAdd(INSTANCIAS, 'muerta');
     await redis.sAdd(inst('muerta'), 'viejo1');
@@ -284,7 +252,7 @@ const grupoLimpieza = async () => {
             (await redis.exists(INSTANCIAS)) === 0
     );
 
-    // EL CASO QUE IMPORTA: si alguien reporta conexiones, NO tiene que tocar nada.
+    // The case that matters: with someone reporting connections it must touch nothing.
     await limpiar();
     await correr(LUA_ENTRA, [inst('viva'), CONEX, ONLINE], ['conectado']);
     const conVivos = await correr(
@@ -299,14 +267,14 @@ const grupoLimpieza = async () => {
     );
 };
 
-// ── 6. Que estos scripts sigan siendo LOS DEL CÓDIGO ───────────────────────
+// ── 6. That these scripts are still THE ONES in the code ───────────────────
 const grupoSincronia = async () => {
     console.log('\n── Que los scripts probados sean los que están en presence.ts');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const path = require('path');
-    // Desde dist/scripts/ → src/app/socket/presence.ts
+    // From dist/scripts/ → src/app/socket/presence.ts
     const ruta = path.resolve(
         __dirname,
         '../../src/app/socket/presence.ts'
@@ -347,21 +315,16 @@ const main = async () => {
         memoria = new RedisMemoryServer();
         url = `redis://${await memoria.getHost()}:${await memoria.getPort()}`;
     } else {
-        // ⚠️ GUARDA DE BORRADO, hermana de la de `verificarContraMongo`. Esta
-        // verificación borra TODAS las claves `presence:*`, el conjunto
-        // `online_users` y `presence:lider`, el lease de la elección de líder.
-        // Contra el Redis vivo desarma la presencia de quien esté conectado.
+        // ⚠️ DELETE GUARD, sibling of the Mongo one. This wipes every `presence:*`
+        // key, `online_users` and `presence:lider`; against a live Redis it tears
+        // down presence for whoever is connected.
         //
-        // Sobre el lease: una versión anterior de este comentario decía que
-        // borrarlo abre una ventana de dos líderes. El panel del 26/9 lo desmintió
-        // leyendo el Lua: la toma es ATÓMICA y se reintenta en cada barrido, así
-        // que borrarlo ADELANTA una toma, no duplica líderes. El daño real es la
-        // presencia, no la elección.
+        // Clearing the lease only brings a takeover forward (it is atomic and
+        // retried on every sweep), it does not create two leaders. The real damage
+        // is presence, not the election.
         //
-        // No hay nombre de base que mirar como en Mongo, así que el candado es la
-        // confirmación explícita: una cadena que nadie tipea por inercia.
-        //
-        // (No toca `bull:*`: la cola de matcheo no está en riesgo por este script.)
+        // No database name to inspect as in Mongo, so the lock is an explicit
+        // confirmation string nobody types by inertia. `bull:*` is untouched.
         if (process.env.VERIFY_REDIS_BORRAR !== 'si-este-redis-es-descartable') {
             console.error(
                 '\n⛔ Falta la confirmación para borrar en el Redis de VERIFY_REDIS_URL.\n\n' +

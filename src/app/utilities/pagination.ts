@@ -1,19 +1,9 @@
-/* Clamp de paginación (frontera única).
- *
- * El cliente controla `?page` y `?limit`. Sin tope, `?limit=9999999` fuerza a Mongo
- * a traer/serializar una respuesta enorme (DoS barato), y un limit NaN/negativo
- * ensucia el cálculo de páginas. Estas funciones PURAS acotan SIEMPRE a enteros
- * sanos, en un solo lugar reutilizable (así ningún endpoint queda sin tope por
- * olvido, y la metadata de paginación no puede desincronizarse de la consulta).
- *
- * `max` por defecto = 500 (igual que QueryBuilder): corta lo absurdo sin truncar
- * ningún pedido legítimo (nadie pide de a >500 en una página real).
+/* Pagination clamp (single boundary): `?page`/`?limit` are client-controlled, so
+ * an unbounded limit is a cheap DoS and a NaN/negative one corrupts page math.
+ * Always clamp to sane integers here; default max 500 (same as QueryBuilder).
  */
-// OJO con el infinito: `Number('1e999')` es `Infinity`, y la versión anterior
-// (`Math.max(1, Math.floor(Number(raw) || 1))`) lo dejaba pasar tal cual → el
-// `$skip: Infinity` lo rechaza Mongo → 500. Era el mismo 500 por `?page` que este
-// helper venía a cerrar, entrando por otra puerta. Cualquier valor no finito se
-// trata como "no me mandaste página": 1.
+// Careful with infinity: `Number('1e999')` is Infinity, and `$skip: Infinity` makes
+// Mongo throw a 500. Any non-finite value means "no page given" → 1.
 export const clampPage = (raw: unknown): number => {
     const n = Math.floor(Number(raw));
     return Number.isFinite(n) && n >= 1 ? n : 1;

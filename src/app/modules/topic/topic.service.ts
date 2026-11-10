@@ -8,13 +8,11 @@ import { ENUM_AUDIO_MODERATION_STATUS } from '../audio/audio.interface';
 import { ITopic } from './topic.interface';
 import { Topic } from './topic.model';
 
-// Create Topic
 const createTopic = async (payload: ITopic) => {
     const result = await Topic.create(payload);
     return result;
 };
 
-// Get All Topics
 // const getAllTopics = async (query: Record<string, unknown>) => {
 //     const topicQuery = new QueryBuilder(Topic.find({ isDeleted: false }), query)
 //         .search(['name'])
@@ -56,10 +54,9 @@ const getAllTopics = async (query: Record<string, unknown>) => {
     const topics = await Topic.aggregate([
         { $match: matchStage },
         {
-            // `totalAudios` must match what the feed can actually show: only
-            // approved audios (the feed filters `moderationStatus: 'ready'` and
-            // `isBlocked: false`). Counting every row made topic chips advertise
-            // conversations that were still processing or had failed moderation.
+            // `totalAudios` must match what the feed can show: only approved
+            // audios (feed filters `moderationStatus: 'ready'`, `isBlocked: false`).
+            // Counting every row advertised topics still processing or failed.
             $lookup: {
                 from: 'audios',
                 let: { topicId: '$_id' },
@@ -101,7 +98,6 @@ const getAllTopics = async (query: Record<string, unknown>) => {
     };
 };
 
-// Get Topic by ID
 const getTopicById = async (topicId: string) => {
     const topic = await Topic.findById(topicId);
     if (!topic) {
@@ -110,7 +106,6 @@ const getTopicById = async (topicId: string) => {
     return topic;
 };
 
-// Update Topic
 const updateTopic = async (topicId: string, payload: ITopic) => {
     const topic = await Topic.findById(topicId);
     if (!topic) {
@@ -130,7 +125,6 @@ const updateTopic = async (topicId: string, payload: ITopic) => {
     return updatedTopic;
 };
 
-// Delete Topic
 const deleteTopic = async (topicId: string) => {
     const topic = await Topic.findById(topicId);
     if (!topic) {

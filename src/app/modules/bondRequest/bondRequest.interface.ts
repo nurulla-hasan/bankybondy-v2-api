@@ -14,28 +14,28 @@ export interface IBondRequest {
     };
     description?: string;
     radius?: number;
-    // 'physical' (con radio) u 'online' (global). Ausente = físico (legado).
+    // 'physical' (with radius) or 'online' (global). Absent = physical (legacy).
     modality?: BondModality;
     status: (typeof ENUM_BOND_REQUEST_STATUS)[keyof typeof ENUM_BOND_REQUEST_STATUS];
     isLinked: boolean;
     createdAt?: Date;
     updatedAt?: Date;
     isPause: boolean;
-    // Soft-delete: ver la nota en bondRequest.model.ts. Sobrevive para el
-    // historial del vínculo completado y la reseña, pero no se lista ni ocupa cupo.
+    // Soft-delete: see the note in bondRequest.model.ts. Kept for the completed
+    // link history and review, but not listed nor counts against the quota.
     isDeleted?: boolean;
     offerVector: number[];
     wantVector: number[];
-    // Fijado por el robot al terminar de computar/cachear los matches del bond.
-    // Se usa para distinguir "computando" de "computado sin matches" en el serving.
+    // Set by the robot when this bond's matches finish computing/caching.
+    // Distinguishes "computing" from "computed with no matches" at serving time.
     matchesComputedAt?: Date;
-    // AGENDA del próximo recómputo (TTL adaptativo; ver matching.schedule.ts).
-    // Instante FUTURO. Ausente = elegible ya.
+    // SCHEDULE of the next recompute (adaptive TTL; see matching.schedule.ts).
+    // FUTURE instant. Absent = eligible now.
     matchesNextAt?: Date;
-    // Generación de la caché de matches: la invalidación la incrementa y el
-    // cómputo sólo sella su resultado si no cambió mientras corría.
+    // Match cache generation: invalidation bumps it and a computation only seals
+    // its result if it did not change while running.
     matchesGen?: number;
-    // Última vez que el dueño abrió las coincidencias de este vínculo. Señal de
-    // interés real que decide la temperatura (y por lo tanto el TTL).
+    // Last time the owner opened this link's matches. Real-interest signal that
+    // decides the temperature (and therefore the TTL).
     lastServedAt?: Date;
 }

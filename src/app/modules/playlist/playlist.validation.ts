@@ -11,11 +11,10 @@ export const createPlaylistValidationSchema = z.object({
     }),
 });
 
-// El chequeo "al menos un campo" NO se hace acá con un `.refine`: la validación
-// corre ANTES de que el controller inyecte la portada (`cover_image`) del archivo
-// subido, así que un update SÓLO-con-archivo llegaba con el body vacío y el refine
-// lo rechazaba. El guard se aplica en el service (`updatePlaylist`), que ya ve el
-// payload con la portada inyectada.
+// The "at least one field" check is NOT a `.refine` here: validation runs BEFORE
+// the controller injects the uploaded `cover_image`, so an update with ONLY a
+// file arrived with an empty body and the refine rejected it. The guard lives in
+// the service (`updatePlaylist`), which sees the payload with the cover injected.
 export const updatePlaylistValidationSchema = z.object({
     body: z.object({
         name: z.string().optional(),

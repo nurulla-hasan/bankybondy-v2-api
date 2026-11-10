@@ -1,14 +1,13 @@
 import { FilterQuery, Query } from 'mongoose';
 import { clampLimit, clampPage } from '../utilities/pagination';
 
-// Escapa metacaracteres regex (anti ReDoS / inyeccion de patron).
+// Escape regex metacharacters (anti-ReDoS / pattern injection).
 const escapeRegex = (input: string): string =>
     input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 class QueryBuilder<T> {
-    // Campos de identidad/dueño/estado sensible que NUNCA se aceptan del query
-    // string en filter() (el service los fija en el find base). Evita IDOR y
-    // forzado de estado. Ver filter().
+    // Identity/owner/sensitive-state fields never accepted from the query string in
+    // filter(): the service fixes them in the base find. Prevents IDOR and state forcing.
     static readonly BLOCKED_FILTER_FIELDS: string[] = [
         'user',
         'receiver',
@@ -41,10 +40,9 @@ class QueryBuilder<T> {
         'verifyCode',
         'resetCode',
     ];
-    // Campos que NUNCA se pueden pedir por `?fields=` (proyeccion). El cliente no
-    // debe poder reexponer los vectores de embedding, las coordenadas exactas ni
-    // secretos, aunque el service ya los excluya con `.select('-...')`: sin esto,
-    // `?fields=offerVector,location` pisaba esa exclusion. Ver fields().
+    // Fields never requestable via `?fields=`: embeddings, exact coordinates and secrets.
+    // Services already exclude them with `.select('-...')`, but `?fields=offerVector,location`
+    // overrode that. See fields().
     static readonly BLOCKED_PROJECTION_FIELDS: string[] = [
         'offerVector',
         'wantVector',
@@ -77,23 +75,14 @@ class QueryBuilder<T> {
         return this;
     }
     filter(allowedFields: string[] = []) {
-        const queryObj = { ...this.query }; // copy the query
+        const queryObj = { ...this.query };
         const excludeFields = ['searchTerm', 'sort', 'limit', 'page', 'fields'];
         excludeFields.forEach((el) => delete queryObj[el]);
-        // SEGURIDAD (IDOR / forzado de estado). El cliente NO puede filtrar por
-        // campos de identidad/dueño ni de estado sensible: mongoose PISA las claves
-        // del `find` base con las del query string, así que sin esto un
-        // `?user=<otro>` sobrescribía el scope de dueño de endpoints como
-        // myBondRequests/my-audios/my-playlists → IDOR (ver otro usuario), y
-        // `?moderationStatus=REJECTED` / `?isBlocked=false` / `?isPause=true`
-        // forzaban estados. Estos campos SOLO los fija el service en el `find`
-        // base, jamás vienen del cliente.
-        //
-        // CAPA 1: denylist global (sin args). CAPA 2: un endpoint puede OPT-IN a
-        // campos puntuales pasando `allowedFields` (p.ej. el panel admin de audios
-        // filtra por `moderationStatus`/`isBlocked`). SOLO es seguro cuando el
-        // `find` base NO tiene scope de dueño (admin ve todo); en endpoints con
-        // scope (my-*), NO pasar `allowedFields` para no reabrir el IDOR.
+        // SECURITY (IDOR / state forcing): mongoose overrides base `find` keys with query
+        // string keys, so `?user=<other>` overwrote the owner scope of my-* endpoints and
+        // `?moderationStatus=REJECTED` / `?isBlocked=false` forged states. Layer 1: global
+        // denylist. Layer 2: an endpoint may opt in via `allowedFields` (e.g. admin audio
+        // panel), safe ONLY when the base find has no owner scope; never in my-* endpoints.
         QueryBuilder.BLOCKED_FILTER_FIELDS.forEach((el) => {
             if (!allowedFields.includes(el)) delete queryObj[el];
         });
@@ -108,31 +97,20 @@ class QueryBuilder<T> {
     // }
 
     sort() {
-        // El `as string` de antes era una MENTIRA de TypeScript: Express entrega un
-        // ARRAY cuando la query repite la clave (`?sort=a&sort=b`), y ahí
-        // `.startsWith` tira TypeError -> 500. Verificado. Y aunque llegue string, el
-        // valor iba CRUDO al `$sort`: `?sort=$x` da un FieldPath inválido (500) y
-        // `?sort=-` deja el nombre VACÍO (500). `sanitizeMongo` no cubre nada de esto:
-        // limpia CLAVES con `$`/`.`, no VALORES.
-        // Este método lo usan 21 endpoints montados, así que el arreglo va acá y no
-        // uno por uno.
+        // The old `as string` was a TypeScript lie: Express hands an ARRAY for a repeated
+        // key (`?sort=a&sort=b`) and `.startsWith` throws. Even as a string the value hit
+        // `$sort` raw (`?sort=$x` and `?sort=-` were both 500s); `sanitizeMongo` cleans
+        // keys, not values. 21 mounted endpoints use this, so the fix lives here.
         const crudo = Array.isArray(this.query.sort)
             ? this.query.sort[0]
             : this.query.sort;
         const sortField = typeof crudo === 'string' ? crudo.trim() : '';
 
-        // Forma aceptable de un campo: uno o más segmentos separados por punto,
-        // cada uno empezando por letra o guión bajo, y un '-' opcional adelante
-        // para descendente. Cualquier otra cosa cae al orden por defecto en vez de
-        // romper.
-        // OJO con la versión ingenua `/^-?[A-Za-z_][A-Za-z0-9_.]*$/`: deja pasar
-        // `a.`, `a..b` y `a.b.` —comprobado— y Mongo los rechaza igual
-        // ("FieldPath must not end with a '.'", "field names may not be empty"),
-        // así que el 500 volvía por la misma puerta. Exigir la ESTRUCTURA de los
-        // segmentos, no sólo el conjunto de caracteres, es lo que la cierra.
-        // No es una allowlist de campos reales (este builder es genérico y no
-        // conoce el modelo): un campo inexistente pero bien formado simplemente no
-        // ordena por nada, que es fallar cerrado.
+        // Acceptable shape: dot-separated segments each starting with a letter or underscore,
+        // optional leading '-' for descending. Anything else falls back instead of breaking.
+        // The naive `/^-?[A-Za-z_][A-Za-z0-9_.]*$/` still let `a.`, `a..b` and `a.b.` through
+        // and Mongo rejected them (500), so the segment STRUCTURE is what closes it. Not an
+        // allowlist: a well-formed unknown field just sorts by nothing (fails closed).
         const esCampoValido =
             /^-?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(
                 sortField
@@ -140,12 +118,11 @@ class QueryBuilder<T> {
 
         if (esCampoValido) {
             const order = sortField.startsWith('-') ? -1 : 1;
-            // Anclado: el `replace('-','')` sin ancla borraba el PRIMER guión esté
-            // donde esté, así que un campo con guión en el medio quedaba corrompido.
+            // Anchored: unanchored `replace('-','')` stripped the first dash anywhere,
+            // corrupting a field with a mid-name dash.
             const fieldName = sortField.replace(/^-/, '');
             this.modelQuery = this.modelQuery.sort({ [fieldName]: order });
         } else {
-            // Default sorting if no valid sort option is provided
             this.modelQuery = this.modelQuery.sort('-createdAt');
         }
 
@@ -153,28 +130,21 @@ class QueryBuilder<T> {
     }
 
     paginate() {
-        // Tope de seguridad: page/limit se fuerzan a enteros positivos y el limit
-        // se acota a un máximo global (500). Antes se pasaba Number(limit) directo a
-        // Mongo → un usuario podía pedir un limit gigante y forzar consultas/respuestas
-        // costosas (DoS barato). El tope es 500 (no 100) porque hay usos legítimos que
-        // piden 500 (ej. all-audios que el front filtra por tema); igual corta los
-        // pedidos absurdos (miles/millones).
+        // Safety cap: page/limit forced to positive ints and limit capped globally at 500,
+        // because a raw Number(limit) let a user force huge queries (cheap DoS). 500, not
+        // 100, because some callers legitimately ask 500 (e.g. all-audios filtered in the UI).
         const page = clampPage(this?.query.page);
-        const limit = clampLimit(this?.query.limit); // tope 500 (comportamiento previo)
+        const limit = clampLimit(this?.query.limit);
         const skip = (page - 1) * limit;
         this.modelQuery = this.modelQuery.skip(skip).limit(limit);
         return this;
     }
     fields() {
-        // Denylist de proyeccion: se descartan del `?fields=` del cliente los
-        // campos sensibles (vectores/coordenadas/secretos). Sin esto, un
-        // `?fields=offerVector,location` reexponia datos que el service excluye
-        // (o rompia con "proyeccion mixta"). Si tras filtrar no queda nada, se
-        // conserva el default previo (`-_v`).
-        // Mismo problema que en `sort()`: con `?fields=a&fields=b` Express entrega un
-        // ARRAY y `.split` tira TypeError -> 500 (verificado). Se normaliza a string
-        // uniendo con coma, que además preserva la intención del cliente (pidió los
-        // dos campos). Lo usan 19 endpoints montados.
+        // Projection denylist: sensitive `?fields=` entries are dropped, otherwise
+        // `?fields=offerVector,location` re-exposed what the service excludes (or broke with
+        // "mixed projection"). If nothing survives, the previous default (`-_v`) is kept.
+        // Same array issue as `sort()`: `?fields=a&fields=b` arrives as an ARRAY and
+        // `.split` throws, so normalize to a comma-joined string. 19 endpoints use this.
         const crudoFields = this?.query?.fields;
         const raw = Array.isArray(crudoFields)
             ? crudoFields.filter((f) => typeof f === 'string').join(',')
@@ -198,8 +168,8 @@ class QueryBuilder<T> {
     async countTotal() {
         const totalQueries = this.modelQuery.getFilter();
         const total = await this.modelQuery.model.countDocuments(totalQueries);
-        // Mismos clamps que paginate() → la metadata (limit/totalPages) ya no puede
-        // desincronizarse de la consulta real (antes usaba el limit crudo del query).
+        // Same clamps as paginate(): the metadata cannot drift from the real query
+        // (it used to read the raw limit from the query string).
         const page = clampPage(this?.query?.page);
         const limit = clampLimit(this?.query?.limit);
         const totalPages = Math.ceil(total / limit);

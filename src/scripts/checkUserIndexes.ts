@@ -1,19 +1,8 @@
-/* Verifica que el índice {isVerified:1, codeExpireIn:1} de User haya quedado
- * CREADO en la base. Calcado de checkFriendRequestIndexes.ts, y por el mismo
- * motivo: `autoIndex` de Mongoose construye los índices al arrancar el proceso,
- * y SI FALLA LO HACE EN SILENCIO. Sin este chequeo, "está deployado" y "el
- * índice existe" son dos cosas distintas que se parecen.
- *
- * Para qué sirve ese índice: el cron de limpieza de altas incompletas corre
- * CADA 2 MINUTOS (user.services.ts) y consulta
- * `{ isVerified:false, codeExpireIn:{$lte}, createdAt:{$gte} }`. La colección no
- * tenía más índice que el `unique` de email, así que eso era un ESCANEO DE
- * COLECCIÓN COMPLETA cada 2 minutos, para siempre.
- *
- * Solo LEE. No crea ni borra nada.
- *
- * Uso (tras compilar):
- *   node dist/scripts/checkUserIndexes.js
+/* Verifies that User's {isVerified:1, codeExpireIn:1} index was actually CREATED.
+ * Mongoose autoIndex builds at startup and fails SILENTLY, so "deployed" and
+ * "index exists" are different things. Without it, the incomplete-signup cron
+ * (user.services.ts, every 2 min) full-scans the collection forever.
+ * Read-only. Usage (after build): node dist/scripts/checkUserIndexes.js
  */
 import mongoose from 'mongoose';
 import config from '../app/config';
@@ -47,20 +36,11 @@ const main = async (): Promise<void> => {
         console.log(partes.join(' '));
     }
 
-    // Se compara la FORMA de la clave, no el nombre: mongoose lo autogenera y
-    // podría cambiar. El orden importa (igualdad antes que rango).
-    //
-    // Se acepta por PREFIJO, no por igualdad exacta: un índice
-    // {isVerified:1, codeExpireIn:1, createdAt:1} sirve para esta query igual o
-    // mejor, y con igualdad exacta se habría reportado como FALTANTE — una alarma
-    // mentirosa, que es peor que no tener alarma.
-    // Y se EXCLUYEN los índices parciales/sparse/con collation. Sin esto, el
-    // chequeo por prefijo abría un FALSO POSITIVO: un índice con la misma clave
-    // pero `partialFilterExpression:{isVerified:true}` se reportaría ✅ OK siendo
-    // INÚTIL para una query que filtra `isVerified:false`. Y no es rebuscado — el
-    // pie de este mismo script sugiere evaluar un índice parcial más adelante.
-    // Un falso positivo es peor que un falso negativo: deja al script mintiendo
-    // en verde, que es exactamente lo que esta alarma existe para no hacer.
+    // Compare key SHAPE, not name (mongoose autogenerates it), and accept by
+    // PREFIX: a longer index serves this query too. EXCLUDE partial/sparse/
+    // collation — a partial {isVerified:true} index would be a false OK, useless
+    // for a query filtering isVerified:false. A false positive is worse than a
+    // false negative: it leaves this alarm lying in green.
     const claves = Object.entries(ESPERADO);
     const encontrado = idx.find((i) => {
         if (i.partialFilterExpression || (i as any).sparse || (i as any).collation)
@@ -91,9 +71,8 @@ const main = async (): Promise<void> => {
         );
     }
 
-    // Cuántos documentos caen del lado útil del índice. Si esto es enorme, vale
-    // la pena evaluar un índice PARCIAL sobre {isVerified:false}, que pesaría en
-    // proporción a las altas sin verificar y no a toda la colección.
+    // How many docs fall on the useful side of the index. If huge, consider a
+    // PARTIAL index on {isVerified:false}, proportional to unverified signups.
     const sinVerificar = await User.countDocuments({ isVerified: false });
     const total = await User.estimatedDocumentCount();
     console.log(
@@ -109,7 +88,7 @@ main().catch(async (e) => {
     try {
         await mongoose.connection.close();
     } catch {
-        // ya estaba cerrada
+        // already closed
     }
     process.exit(1);
 });

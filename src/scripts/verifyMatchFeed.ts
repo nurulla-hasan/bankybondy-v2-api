@@ -1,11 +1,10 @@
-/* Verifica el read model contra el camino legacy en bonds reales.
+/* Verifies the read model against the legacy path on real bonds.
  *
- * Para cada bond de la muestra compara el TOP-100 por score de:
- *   - legacy: BondMatch.find({ bonds: id })
- *   - feed:   BondMatchFeed.find({ bond: id }).sort({ score: -1 }).limit(1000)
- * Reporta jaccard y diferencias. Sale con 1 si falta algún match en el feed.
+ * Compares the top-100 by score from legacy (BondMatch by bonds) vs feed
+ * (BondMatchFeed by bond), reports jaccard and diffs; exits 1 if the feed misses
+ * any legacy match.
  *
- * Uso: npx tsx src/scripts/verifyMatchFeed.ts
+ * Usage: npx tsx src/scripts/verifyMatchFeed.ts
  */
 import mongoose from 'mongoose';
 import config from '../app/config';
@@ -17,9 +16,8 @@ import { MATCHING } from '../app/modules/bondRequest/matching.config';
 const SAMPLE = 25;
 const TOP = 100;
 
-/** Top-N de lo que el serving REALMENTE muestra: primero dedup por conjunto
- *  (bestBySet, quedándose con el mayor score), después orden y corte. Comparar
- *  filas legacy crudas daba un "legacyTop" artificialmente corto por duplicados. */
+/** Top-N of what serving ACTUALLY shows: dedup by set (keeping the highest score),
+ *  then sort and cut. Raw legacy rows gave a short "legacyTop" due to duplicates. */
 const dedupTop = (rows: any[], n: number): string[] => {
     const best = new Map<string, number>();
     for (const r of rows) {
@@ -41,8 +39,8 @@ const main = async (): Promise<void> => {
     // eslint-disable-next-line no-console
     console.log('[feed-verify] DB connected');
 
-    // Los bonds más referenciados son el peor caso (los que hoy hacen lento el
-    // serving), así que son la muestra correcta.
+    // The most referenced bonds are the worst case (today's slow serving), so they
+    // are the right sample.
     const hot = (await BondMatch.aggregate([
         { $unwind: '$bonds' },
         { $group: { _id: '$bonds', n: { $sum: 1 } } },

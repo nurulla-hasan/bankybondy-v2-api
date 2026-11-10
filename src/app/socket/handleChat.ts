@@ -21,20 +21,16 @@ import {
 } from '../helper/messageRejection';
 import { emitError } from './helper';
 
-// ¿el usuario está entre los participantes del chat? (control anti-IDOR)
+// Is the user a participant of this chat? (anti-IDOR guard)
 const isParticipant = (participants: any[], userId: string): boolean =>
     Array.isArray(participants) &&
     participants.some((p) => p?.toString() === userId?.toString());
 
-// ¿el emisor tiene una relación de bloqueo (en cualquier sentido) con alguien de
-// este chat grupal? Las ramas de grupo validaban SOLO membresía, así que un
-// bloqueo hecho DESPUÉS de armar el grupo no tenía ningún efecto: los dos
-// usuarios seguían cruzándose ahí adentro. Es el complemento del guard de
-// creación en bondLink.service (que impide formar el grupo) para el caso del
-// bloqueo posterior.
-//
-// Se compara al EMISOR contra el resto, no todos los pares: si dos terceros se
-// bloquearon entre sí, eso no debe silenciar a alguien ajeno a ese conflicto.
+// Does the sender have a block relation (either way) with anyone in this group chat?
+// Group branches validated membership only, so a block made AFTER the group was formed
+// had no effect. Complements the creation guard in bondLink.service. Compares the sender
+// against the rest, not all pairs: two third parties blocking each other must not silence
+// an outsider.
 const tieneBloqueoEnElGrupo = async (
     currentUserId: string,
     participants: any[]
@@ -47,8 +43,8 @@ const tieneBloqueoEnElGrupo = async (
     );
 };
 
-// Payload de error único para el corte por bloqueo en grupos. No dice QUIÉN está
-// bloqueado: en un grupo eso delataría una relación entre terceros.
+// Single error payload for the group block cut. Never says WHO is blocked: in a group
+// that would expose a relation between third parties.
 const emitirBloqueoDeGrupo = () => ({
     code: 403,
     message: 'You cannot message this group',
@@ -61,7 +57,6 @@ const handleChat = async (
     socket: Socket,
     currentUserId: string
 ): Promise<void> => {
-    // new message -----------------------------------
     socket.on('send-message', async (data) => {
       try {
         if (
@@ -79,17 +74,13 @@ const handleChat = async (
             return;
         }
 
-        // Texto NORMALIZADO para las TRES ramas. Un valor no-string (null, un
-        // número, un objeto) se guardaba igual, y el filtro fijo de `getMessages`
-        // (`text: {$regex: ''}`) nunca lo matcheaba → el mensaje desaparecía del
-        // historial para siempre, sin dar ningún error.
+        // Normalize text for all three branches: a non-string used to be saved and then
+        // never matched `getMessages`' fixed regex, vanishing from history with no error.
         const msgText = normalizeMessageText(data?.text);
 
-        // Moderacion de mensajes (censura gratis): lista dura + capa gratis de
-        // OpenAI (omni-moderation-latest). Bloquea al enviar; si OpenAI falla,
-        // fail-open (no rompe el chat). Cubre las 3 ramas porque va antes de
-        // ramificar por receiver/groupId/bondLinkId. El veredicto se
-        // guarda: la rama 1-a-1 lo reusa en el núcleo y así no se paga dos veces.
+        // Moderation (free censorship): hard list + free OpenAI layer. Blocks on send,
+        // fail-open if OpenAI fails. Covers all three branches because it runs before
+        // branching, and the verdict is reused by the 1-a-1 core so it is paid once.
         let moderation: SafetyResult | undefined;
         if (msgText.trim()) {
             moderation = await isMessageSafe(msgText);
@@ -104,8 +95,8 @@ const handleChat = async (
             }
         }
 
-        // Adjuntos: se reparten UNA vez, antes de ramificar, para poder avisar los
-        // descartados y no guardar un mensaje sin contenido.
+        // Attachments split once, before branching, so dropped ones can be reported and
+        // empty messages are never saved.
         const attachments = partitionAttachmentUrls(data);
         const sinContenido = emptyMessageFailure(
             msgText,
@@ -118,11 +109,8 @@ const handleChat = async (
         }
 
         if (data?.receiver) {
-            // El MISMO núcleo que usa `POST /message/send`: valida el receptor y el
-            // bloqueo, crea la conversación si falta, filtra los adjuntos, guarda,
-            // des-oculta el chat para los dos y emite. Las reglas del 1-a-1 viven
-            // en helper/createOneToOneMessage.ts, no acá, para que ningún
-            // transporte pueda saltárselas.
+            // Same core used by `POST /message/send`. 1-a-1 rules live in
+            // helper/createOneToOneMessage.ts, not here, so no transport can skip them.
             const result = await createOneToOneMessage({
                 currentUserId,
                 receiver: data.receiver,
@@ -178,7 +166,7 @@ const handleChat = async (
                 return;
             }
 
-            // Solo un participante del chat puede enviar mensajes (anti-IDOR).
+            // Only a chat participant may send messages (anti-IDOR).
             if (!isParticipant(chat.participants, currentUserId)) {
                 emitError(socket, {
                     code: 403,
@@ -194,11 +182,9 @@ const handleChat = async (
                 return;
             }
 
-            // create new message
             const messageData = {
                 text: msgText,
-                // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
-                // el socket; sin este filtro podía inyectar cualquier link).
+                // Attachments: only our CDN URLs (client URLs could inject arbitrary links).
                 imageUrl: attachments.kept.imageUrl,
                 videoUrl: attachments.kept.videoUrl,
                 pdfUrl: attachments.kept.pdfUrl,
@@ -215,26 +201,14 @@ const handleChat = async (
                 path: 'msgByUserId',
                 select: 'name profile_image',
             });
-            // B1: se emite la forma común (helper/messageEmitShape.ts), no el doc
-            // crudo — mismas claves que entrega `get-messages`.
+            // B1: emit the shared shape (helper/messageEmitShape.ts), not the raw doc,
+            // same keys `get-messages` returns.
             const clientMessage = shapeSentMessage(populatedMessage);
-            // A16 (2a parte): mismo des-ocultar que en 1-a-1, ahora para el chat
-            // de GRUPO. El fix original cerro solo la rama 1-a-1 y la clase quedo
-            // abierta aca: el boton "Ocultar" se ofrece para CUALQUIER tipo de
-            // conversacion sin mirar el tipo (ConversationListItem.jsx), el listado
-            // excluye por hiddenBy sin importar el tipo (conversation.service.ts) y
-            // el badge de no-leidos tambien (message.service.ts). O sea que un grupo
-            // oculto se tragaba los mensajes exactamente igual, y la medicion del
-            // 26/8 encontro 2 asi en produccion. El modal de confirmacion —que es el
-            // MISMO para los tres tipos— promete "Podras seguir recibiendo mensajes
-            // nuevos de este chat"; hasta aca esa promesa era mentira en grupos.
-            //
-            // Se des-oculta a TODOS los participantes, no solo al emisor: el
-            // criterio es el mismo que en 1-a-1 (ocultar ordena la lista, no
-            // silencia) y en un grupo el mensaje llega a todos.
-            //
-            // La rama de bondLink NO se toca: ahi hiddenBy tambien lo usa
-            // rejectBondLink a proposito para sacar del chat al que rechaza.
+            // A16: same unhide as 1-a-1, now for GROUP chats. Hide is offered for any
+            // conversation type and the listing/badge filter by hiddenBy regardless of
+            // type, so a hidden group swallowed messages too. Unhide every participant
+            // (the message reaches all). bondLink is untouched: there hiddenBy is used
+            // on purpose by rejectBondLink to remove the user who rejected the swap.
             await Conversation.updateOne(
                 { _id: chat?._id },
                 {
@@ -254,8 +228,8 @@ const handleChat = async (
                     );
                     io.to(uid).emit('conversation', singleConversation);
 
-                    // Refrescar el contador de no-leidos del participante (fuente
-                    // unica): sube badge + negrita en vivo tambien en grupos.
+                    // Refresh the participant's unread count (single source) so badge and
+                    // bold update live in groups too.
                     if (uid !== currentUserId.toString()) {
                         await emitUnreadCount(io, uid);
                     }
@@ -303,7 +277,7 @@ const handleChat = async (
                 return;
             }
 
-            // Solo un participante del chat puede enviar mensajes (anti-IDOR).
+            // Only a chat participant may send messages (anti-IDOR).
             if (!isParticipant(chat.participants, currentUserId)) {
                 emitError(socket, {
                     code: 403,
@@ -319,9 +293,8 @@ const handleChat = async (
                 return;
             }
 
-            // "Salió del chat" (rechazó el trueque → quedó en hiddenBy): no puede
-            // seguir mandando mensajes al grupo del que se fue. Los que se quedan sí
-            // siguen chateando (el trueque cae, la conversación queda de historial).
+            // Left the chat (rejected the swap -> ended up in hiddenBy): cannot keep
+            // sending. Those who stayed still chat; the conversation remains as history.
             const hiddenBy = (chat.hiddenBy || []).map((x: any) => x.toString());
             if (hiddenBy.includes(currentUserId.toString())) {
                 emitError(socket, {
@@ -333,11 +306,9 @@ const handleChat = async (
                 return;
             }
 
-            // create new message
             const messageData = {
                 text: msgText,
-                // Adjuntos: SOLO URLs de nuestro CDN (el cliente manda la URL por
-                // el socket; sin este filtro podía inyectar cualquier link).
+                // Attachments: only our CDN URLs (client URLs could inject arbitrary links).
                 imageUrl: attachments.kept.imageUrl,
                 videoUrl: attachments.kept.videoUrl,
                 pdfUrl: attachments.kept.pdfUrl,
@@ -354,8 +325,8 @@ const handleChat = async (
                 path: 'msgByUserId',
                 select: 'name profile_image',
             });
-            // B1: se emite la forma común (helper/messageEmitShape.ts), no el doc
-            // crudo — mismas claves que entrega `get-messages`.
+            // B1: emit the shared shape (helper/messageEmitShape.ts), not the raw doc,
+            // same keys `get-messages` returns.
             const clientMessage = shapeSentMessage(populatedMessage);
             await Conversation.updateOne(
                 { _id: chat?._id },
@@ -367,8 +338,8 @@ const handleChat = async (
             await Promise.all(
                 chat.participants.map(async (participantId: Types.ObjectId) => {
                     const uid = participantId.toString();
-                    // Los que salieron del chat (hiddenBy) no reciben el mensaje ni
-                    // la re-inserción en vivo del chat que ocultaron.
+                    // Those who left (hiddenBy) get neither the message nor the live
+                    // re-insertion of the chat they hid.
                     if (hiddenBy.includes(uid)) return;
                     io.to(uid).emit(`message-${bondLinkId}`, clientMessage);
                     const singleConversation = await getSingleConversation(
@@ -378,8 +349,8 @@ const handleChat = async (
                     );
                     io.to(uid).emit('conversation', singleConversation);
 
-                    // Refrescar el contador de no-leidos del participante (fuente
-                    // unica): sube badge + negrita en vivo tambien en grupos.
+                    // Refresh the participant's unread count (single source) so badge and
+                    // bold update live in groups too.
                     if (uid !== currentUserId.toString()) {
                         await emitUnreadCount(io, uid);
                     }
@@ -396,14 +367,11 @@ const handleChat = async (
       }
     });
 
-    // send---------------------------------
     socket.on('seen', async ({ conversationId }) => {
       try {
-        // Las guardas (NoSQL crudo, IDOR) viven en markSeen, que es el mismo
-        // código que usa `POST /message/mark-seen`; duplicarlas acá es la forma
-        // clásica de que un camino se arregle y el otro no. El resultado se
-        // ignora a propósito: como antes, el socket no avisa de un id inválido
-        // ni de un no-participante (no le entrega nada nuevo a nadie).
+        // Guards (raw NoSQL, IDOR) live in markSeen, shared with `POST /message/mark-seen`;
+        // duplicating them here is how one path gets fixed and the other does not. Result
+        // ignored on purpose: the socket stays silent on an invalid id or non-participant.
         await markSeen({ conversationId, currentUserId, io });
       } catch (err: any) {
         emitError(socket, {

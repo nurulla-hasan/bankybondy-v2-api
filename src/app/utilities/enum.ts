@@ -26,29 +26,25 @@ export const ENUM_NOTIFICATION_TYPE = {
     ORDER: 'ORDER',
     GENERAL: 'GENERAL',
     PAYMENT: 'PAYMENT',
-    // Tipos de dominio de BankyBondy (Fase 2 de notificaciones). El front los usa
-    // para rutear por tipo (y, en Fase 3, ícono/color). MATCH reemplaza el uso de
-    // GENERAL en las notificaciones de match. Agregar valores es aditivo: no rompe
-    // las notificaciones ya guardadas (siguen siendo válidas).
+    // BankyBondy domain types (Phase 2 of notifications); the front routes by type.
+    // MATCH replaces GENERAL for match notifications. Adding values is additive.
     MATCH: 'MATCH',
     TRADE_PROPOSED: 'TRADE_PROPOSED',
     TRADE_COMPLETED: 'TRADE_COMPLETED',
     REVIEW: 'REVIEW',
     FRIEND_REQUEST: 'FRIEND_REQUEST',
     FRIEND_ACCEPTED: 'FRIEND_ACCEPTED',
-    // Momentos especiales del trueque propuesto (Fase 3, Tanda B). Mismo idioma
-    // de color del matcheo (matching.colors.ts): regalo = coral, doble sorpresa
-    // = fucsia, doble vacío = encuentro (coral + charla). GIFT_RECEIVED = te dan
-    // algo sin pedir nada; GIFT_GIVEN = das algo sin recibir nada.
+    // Special moments of the proposed trade (Phase 3, Tanda B), same color language as
+    // matching.colors.ts. GIFT_RECEIVED = given without asking; GIFT_GIVEN = giving.
     GIFT_RECEIVED: 'GIFT_RECEIVED',
     GIFT_GIVEN: 'GIFT_GIVEN',
     DOUBLE_SURPRISE: 'DOUBLE_SURPRISE',
     ENCOUNTER: 'ENCOUNTER',
-    // Empujón a subir de plan al llegar al tope de vínculos (25 Free / 100 Standard;
-    // no en Premium). Clickeable → página de planes. Apagable en el engranaje.
+    // Nudge to upgrade when hitting the link cap (25 Free / 100 Standard; not
+    // Premium). Clickable → plans page. Mutable in settings.
     SUBSCRIPTION: 'SUBSCRIPTION',
-    // Recordatorio de cerrar un trueque viejo Ongoing (para que se apliquen las
-    // reseñas en suspenso). Clickeable → el chat del trueque (/message).
+    // Reminder to close a stale Ongoing trade (so pending reviews can apply).
+    // Clickable → the trade chat (/message).
     TRADE_REMINDER: 'TRADE_REMINDER',
 };
 

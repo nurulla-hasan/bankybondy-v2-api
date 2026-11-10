@@ -19,7 +19,7 @@ const AudioBookmarkSchema = new Schema<IBookmark>(
     }
 );
 
-// Un usuario no puede tener el mismo audio en favoritos dos veces (B.3).
+// A user may bookmark the same audio only once (B.3).
 AudioBookmarkSchema.index({ user: 1, audio: 1 }, { unique: true });
 
 const AudioBookmark = model('AudioBookmark', AudioBookmarkSchema);

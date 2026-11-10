@@ -5,7 +5,7 @@ export const ENUM_BOND_REQUEST_STATUS = {
     CANCELED: 'CANCELED',
 };
 
-// Modalidad del intercambio: físico (con radio geográfico) u online (global).
+// Exchange modality: physical (with geo radius) or online (global).
 export const ENUM_BOND_MODALITY = {
     PHYSICAL: 'physical',
     ONLINE: 'online',

@@ -21,10 +21,8 @@ const audioBookmarkAddDelete = async (profileId: string, audioId: string) => {
         });
         return null;
     } else {
-        // Solo se puede bookmarkear un audio VISIBLE (READY y no bloqueado). Antes
-        // solo se chequeaba existencia → con el id se guardaban/reveían audios
-        // rechazados/procesando/bloqueados. (El path de DELETE de arriba queda libre
-        // para poder sacar un bookmark viejo de un audio que después se bloqueó.)
+        // Only visible audios (READY, not blocked) can be bookmarked. DELETE stays
+        // open so stale bookmarks of now-blocked audios can be removed.
         const a = audio as unknown as {
             isBlocked?: boolean;
             moderationStatus?: string;
@@ -35,11 +33,8 @@ const audioBookmarkAddDelete = async (profileId: string, audioId: string) => {
         ) {
             throw new AppError(httpStatus.NOT_FOUND, 'Audio not found');
         }
-        // Bloqueo entre usuarios: no se puede guardar en favoritos el audio de
-        // alguien con quien hay relación de bloqueo (en cualquier sentido). Sin
-        // esto, con sólo el id se reexponía y guardaba el audio del que te bloqueó.
-        // (El path de DELETE de arriba queda libre a propósito: poder sacar un
-        // bookmark viejo aunque después haya aparecido el bloqueo.)
+        // Block relation either way: the audio cannot be bookmarked. DELETE stays
+        // open on purpose so old bookmarks can still be cleared.
         const ownerId = (
             audio as unknown as { user?: { toString(): string } }
         ).user?.toString();
@@ -56,7 +51,7 @@ const audioBookmarkAddDelete = async (profileId: string, audioId: string) => {
             });
             return result;
         } catch (error: unknown) {
-            // Carrera con el indice unico (user+audio): ya existe -> idempotente.
+            // Unique (user, audio) race: already exists → idempotent.
             if ((error as { code?: number })?.code === 11000) {
                 return await AudioBookmark.findOne({
                     user: profileId,
@@ -68,21 +63,14 @@ const audioBookmarkAddDelete = async (profileId: string, audioId: string) => {
     }
 };
 
-// get bookmark from db
 const getMyBookmarkFromDB = async (profileId: string) => {
     const result = await AudioBookmark.find({ user: profileId }).populate({
         path: 'audio',
         populate: { path: 'audioTopic' },
     });
-    // Bloqueo entre usuarios: descartar además los favoritos cuyo DUEÑO esté en
-    // relación de bloqueo (en cualquier sentido). Un audio que guardaste antes de
-    // bloquear (o de ser bloqueado) no debe seguir apareciendo en tus favoritos.
+    // Drop bookmarks whose owner is in a block relation either way.
     const blockedIds = new Set(await getBlockedIdsFor(profileId));
-    // Guard (follow-up de AB): descartar bookmarks cuyo audio ya no corresponde
-    // mostrar — borrado (audio == null tras populate), BLOQUEADO por admin, o que
-    // NO está aprobado (moderationStatus != READY). Mismo criterio que el guard de
-    // creación del bookmark: un audio que se bloqueó/rechazó después no debe seguir
-    // apareciendo en la lista del usuario.
+    // Drop bookmarks whose audio was deleted, blocked by an admin or is not READY.
     return result.filter((bookmark) => {
         const audio = bookmark.audio as unknown as {
             isBlocked?: boolean;

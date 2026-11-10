@@ -1,9 +1,7 @@
 /**
- * Bond write transactions keep the durability/read semantics the original
- * link-creation transaction relied on. A session otherwise inherits the
- * connection defaults (the app connection does not set a majority write
- * concern), so pass these options explicitly to every withTransaction call
- * that mutates bond state.
+ * Bond writes keep majority write concern and primary reads: a session otherwise
+ * inherits connection defaults (no majority). Pass to every withTransaction that
+ * mutates bond state.
  */
 export const BOND_TRANSACTION_OPTIONS = {
     readConcern: { level: 'local' },

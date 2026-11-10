@@ -4,9 +4,7 @@ import { getSingleConversation } from './getSingleConversation';
 
 type PopulateField = 'participants' | 'chatGroup' | 'bondLink';
 
-// El campo que hay que poblar depende del TIPO de conversación: es el que el
-// cliente usa para dibujar la fila (el par, el grupo, el vínculo). Idéntico a lo
-// que ya mandan las ramas de `send-message`.
+// Populated field depends on conversation type; must match what `send-message` branches emit.
 export const fieldForType = (type?: string): PopulateField => {
     if (type === ENUM_CONVERSATION_TYPE.chatGroup) return 'chatGroup';
     if (type === ENUM_CONVERSATION_TYPE.bondLinkGroup) return 'bondLink';
@@ -14,11 +12,8 @@ export const fieldForType = (type?: string): PopulateField => {
 };
 
 /**
- * Refresca la fila de la lista de chats, en vivo, para cada usuario indicado.
- *
- * Sin `userIds` va a TODOS los participantes; con `userIds`, solo a esos. La
- * fila es por usuario (`unseenMsg` y el par cambian según quién la mire), así que
- * se emite una por persona, igual que hacen las ramas de `send-message`.
+ * Refreshes the chat-list row live for each target user.
+ * No `userIds` means all participants; the row is per-user, so one emit per person.
  */
 export const emitConversationSnapshots = async (
     io: IOServer,

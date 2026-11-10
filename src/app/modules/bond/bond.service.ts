@@ -6,7 +6,7 @@ import QueryBuilder from '../../builder/QueryBuilder';
 import mongoose from 'mongoose';
 
 const createBondIntoDB = async (userId: string, payload: IBond) => {
-    // Allowlist (anti mass-assignment, consistente con el update): `user` se fuerza.
+    // Allowlist (anti mass-assignment, same as update): `user` is forced.
     return await Bond.create({
         offer: payload.offer,
         want: payload.want,
@@ -32,8 +32,8 @@ const getMyBonds = async (userId: string, query: Record<string, unknown>) => {
 };
 
 const getSingleBond = async (id: string) => {
-    // populate acotado: antes `populate('user')` devolvía el perfil COMPLETO del
-    // dueño (email/phone/address/dateOfBirth/etc.). Solo se expone lo público.
+    // Narrow populate: plain `populate('user')` returned the owner's FULL profile
+    // (email/phone/address/dateOfBirth...). Only public fields are exposed.
     const bond = await Bond.findById(id).populate({
         path: 'user',
         select: 'name profile_image',
@@ -50,8 +50,8 @@ const updateBondIntoDB = async (
     const bond = await Bond.findOne({ _id: id, user: userId });
     if (!bond) throw new AppError(httpStatus.NOT_FOUND, 'Bond not found');
 
-    // Mass-assignment: solo campos editables (validateRequest no recorta el body).
-    // Sin esto, un usuario podía inyectar `user` y reasignar su bond a otro perfil.
+    // Mass-assignment: only editable fields (validateRequest doesn't trim the
+    // body). Without this a user could inject `user` and reassign the bond.
     const safePayload: Partial<IBond> = {};
     for (const k of ['offer', 'want', 'tag'] as const) {
         if ((payload as any)[k] !== undefined) {

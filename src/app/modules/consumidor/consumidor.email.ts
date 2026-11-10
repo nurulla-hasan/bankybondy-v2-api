@@ -1,10 +1,10 @@
 import { ISolicitudConsumidor } from './consumidor.model';
 
-// La casilla de soporte, la misma que usa /contact-us (helper/sendContactUsEmail.ts).
+// Support inbox, same one used by /contact-us (helper/sendContactUsEmail.ts).
 export const CASILLA_SOPORTE = 'bankybondyar@gmail.com';
 
-// Misma función que la de helper/sendContactUsEmail.ts (allá no se exporta): los
-// campos vienen de un formulario PÚBLICO y se interpolan en el HTML del mail.
+// Same helper as sendContactUsEmail.ts (not exported there): fields come from a
+// PUBLIC form and are interpolated into the email HTML.
 const escapeHtml = (s: string): string =>
     s
         .replace(/&/g, '&amp;')
@@ -13,8 +13,8 @@ const escapeHtml = (s: string): string =>
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 
-// Hora de Argentina: es la que cuenta para los 10 días corridos del art. 34 de
-// la Ley 24.240, y la que va a leer la persona.
+// Argentina time: governs the 10 calendar days of art. 34, Ley 24.240, and is what
+// the recipient reads.
 export const fechaLegible = (fecha: Date, idioma: 'es' | 'en'): string =>
     new Intl.DateTimeFormat(idioma === 'en' ? 'en-US' : 'es-AR', {
         timeZone: 'America/Argentina/Buenos_Aires',
@@ -37,11 +37,10 @@ const envolver = (titulo: string, cuerpo: string): string => `
 const bloqueCodigo = (codigo: string): string =>
     `<p style="font-size:22px;font-weight:bold;letter-spacing:1px;background:#f9fafb;border-left:4px solid #e2765a;padding:12px 16px;margin:16px 0;">${escapeHtml(codigo)}</p>`;
 
-/** Mail a la persona que hizo el pedido, en su idioma. SIN el nombre a propósito:
- *  el formulario es público, así que cualquiera puede poner el email de un
- *  tercero y usar el nombre como texto libre (phishing con nuestro remitente).
- *  Va con Reply-To a soporte (ver el service): la RESPUESTA a este correo es la
- *  verificación de identidad de la baja (Disp. 3/2026). */
+/** Mail to the requester, in their language. Deliberately WITHOUT the name: the form
+ *  is public, so anyone could enter a third party's email and abuse the name as free
+ *  text (phishing with our sender). Reply-To goes to support: replying is the identity
+ *  check for the cancellation (Disp. 3/2026). */
 export const mailConsumidor = (
     s: Pick<ISolicitudConsumidor, 'codigo' | 'tipo' | 'idioma'>,
     fecha: Date
@@ -89,7 +88,7 @@ export const mailConsumidor = (
     };
 };
 
-/** Mail a soporte: todo lo que hace falta para resolver el pedido a mano. */
+/** Mail to support: everything needed to handle the request manually. */
 export const mailSoporte = (
     s: ISolicitudConsumidor,
     fecha: Date

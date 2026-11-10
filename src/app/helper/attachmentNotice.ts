@@ -1,18 +1,14 @@
 import type { AttachmentPartition } from './attachmentUrl';
 import { errorLogger } from '../shared/logger';
 
-// Un `Socket` y un `io.to(profileId)` comparten `.emit(evento, payload)`: con ese
-// mínimo la misma función avisa tanto en el envío por socket como en el por HTTP,
-// que no tiene un socket propio pero sí la sala del usuario.
+// Socket and io.to(room) share emit(), so one function covers socket and HTTP paths.
 type Emisor = { emit: (event: string, payload: unknown) => void };
 
 export const totalDropped = (dropped: AttachmentPartition['dropped']): number =>
     dropped.imageUrl + dropped.videoUrl + dropped.pdfUrl;
 
-// AVISO de adjuntos que NO se guardaron. `filterCdnAttachmentUrls` los tiraba en
-// silencio: el cliente veía su burbuja "enviada" con el archivo perdido para
-// siempre. Es un evento NUEVO y aditivo (un cliente viejo lo ignora) y va al
-// emisor, que es el único que puede re-subir el archivo.
+// Reports attachments that were NOT stored (previously dropped silently). New additive
+// event: sent to the sender, the only party able to re-upload.
 export const notifyDroppedAttachments = (
     target: Emisor,
     attachments: AttachmentPartition,
@@ -21,9 +17,7 @@ export const notifyDroppedAttachments = (
     const dropped = totalDropped(attachments.dropped);
     if (dropped <= 0) return;
 
-    // Sin CLOUDFRONT_URL se descarta TODO por fail-closed. No se guarda el link
-    // ajeno (eso no se negocia), pero al menos queda en el log y el cliente puede
-    // decir "subidas no disponibles" en vez de perder el archivo sin más.
+    // Fail-closed: no CLOUDFRONT_URL means everything dropped; log it so the loss is visible.
     const reason = attachments.cdnUnconfigured ? 'cdn_unconfigured' : 'not_cdn_url';
     if (attachments.cdnUnconfigured) {
         errorLogger.error(

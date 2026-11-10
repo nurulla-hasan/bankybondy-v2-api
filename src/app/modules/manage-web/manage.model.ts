@@ -1,6 +1,5 @@
 import mongoose, { model } from 'mongoose';
 
-//! Privacy and policy
 const privacySchema = new mongoose.Schema(
   {
     description: {
@@ -15,7 +14,6 @@ const privacySchema = new mongoose.Schema(
     },
   },
 );
-//! About US
 const aboutUsSchema = new mongoose.Schema(
   {
     description: {
@@ -30,7 +28,6 @@ const aboutUsSchema = new mongoose.Schema(
     },
   },
 );
-//! Terms Conditions
 const termsAndConditionsSchema = new mongoose.Schema(
   {
     description: {
@@ -59,7 +56,6 @@ const partnerSchema = new mongoose.Schema(
     },
   },
 );
-//!Contact US
 const contactUsSchema = new mongoose.Schema(
   {
     email: {
@@ -78,7 +74,6 @@ const contactUsSchema = new mongoose.Schema(
     },
   },
 );
-//!FAQ
 const faqSchema = new mongoose.Schema(
   {
     question: {
@@ -97,7 +92,6 @@ const faqSchema = new mongoose.Schema(
     },
   },
 );
-//!Slider
 const sliderSchema = new mongoose.Schema(
   {
     title: {

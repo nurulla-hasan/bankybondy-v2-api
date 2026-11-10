@@ -12,15 +12,13 @@ export const getSingleConversation = async (
 ) => {
     let query = Conversation.findById(conversationId).sort({ updatedAt: -1 });
 
-    // always populate lastMessage
     query = query.populate({ path: 'lastMessage', model: 'Message' });
 
-    // optional populate based on param
     const populateOptions: Record<PopulateField, any> = {
         participants: {
             path: 'participants',
-            // Sin `email`: misma fuga que la lista de chats, por la via del socket.
-            // Ver la nota en conversation.service.ts (proyeccion de userData).
+            // No `email`: same leak as the chat list, via the socket path.
+            // See the note on userData projection in conversation.service.ts.
             select: 'name profile_image _id',
         },
         chatGroup: { path: 'chatGroup', select: 'name image' },
@@ -34,21 +32,16 @@ export const getSingleConversation = async (
     const conversation = await query.exec();
     if (!conversation) return null;
 
-    // count unseen messages (unificado sobre `seenBy`): un mensaje esta no
-    // leido si no lo envio el usuario y su id no esta en el array `seenBy`.
+    // unseen count uses `seenBy` only: unread = not sent by me and my id absent from seenBy.
     const countUnseenMessage = await Message.countDocuments({
         conversationId: conversation._id,
-        // Un mensaje BORRADO no cuenta como no leído. El contador global del
-        // navbar (getUnreadMessageCount) sí lo filtra, y sin esta línea los dos
-        // números se contradecían: si alguien borraba un mensaje antes de que lo
-        // leyeras, el navbar decía 0 pero la conversación quedaba en negrita con
-        // badge, apuntando a un mensaje que ya no existe.
+        // Deleted messages don't count: the navbar counter filters them too, and
+        // without this the badge pointed at a message that no longer exists.
         isDeleted: { $ne: true },
         msgByUserId: { $ne: currentUserId },
         seenBy: { $ne: currentUserId },
     });
 
-    // extract the "other" participant if participants were populated
     const otherUser: any = conversation.participants?.find(
         (participant: any) => participant._id.toString() !== currentUserId
     );
@@ -64,8 +57,7 @@ export const getSingleConversation = async (
                   }
                 : null,
         unseenMsg: countUnseenMessage,
-        // always populated; puerta del socket para `conversation`: sin vaciar el
-        // borrado, el preview mostraría el texto de un mensaje ya eliminado.
+        // Socket gate for `conversation`: scrub first or the preview leaks deleted text.
         lastMessage: scrubPreview(toPlainPreview(conversation.lastMessage)),
         type: conversation.type,
         chatGroup: conversation.chatGroup,

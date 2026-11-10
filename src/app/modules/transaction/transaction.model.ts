@@ -19,22 +19,19 @@ const TransactionSchema = new Schema(
             required: true,
             min: 0,
         },
-        // Moneda del `amount`. MercadoPago cobra en ARS (el precio se convierte
-        // con la cotización del día) y PayPal en USD: sin este campo la columna
-        // mezclaba las dos y cualquier suma sobre `amount` daba un número sin
-        // sentido. Default 'USD' porque todo lo anterior a MercadoPago se cobró
-        // en dólares, así que los registros históricos quedan bien tipados.
+        // Currency of `amount`. MercadoPago charges in ARS (price converted at the
+        // day's rate) and PayPal in USD: without this, the column mixed both and
+        // any sum over `amount` was meaningless. Default 'USD' because everything
+        // before MercadoPago was charged in dollars, so history stays well-typed.
         currency: {
             type: String,
             enum: ['USD', 'ARS'],
             default: 'USD',
         },
-        // Plan de la suscripción (Standard | Premium). Solo se completa cuando
-        // type === 'Subscription'; en donaciones queda sin setear. Antes la
-        // transacción NO guardaba el plan, así que el dashboard no podía separar
-        // ingresos Standard vs Premium — sobre todo en MercadoPago, donde el
-        // `amount` viene en ARS convertidos y no se puede inferir el plan. Con
-        // este campo el desglose Income queda robusto y confiable de acá en adelante.
+        // Plan of the subscription (Standard | Premium). Only set when
+        // type === 'Subscription'. Without it the dashboard could not separate
+        // Standard vs Premium income, especially in MercadoPago where `amount` is
+        // converted ARS and the plan cannot be inferred.
         plan: {
             type: String,
             enum: [
@@ -47,38 +44,28 @@ const TransactionSchema = new Schema(
             unique: true,
             sparse: true,
         },
-        // ¿EL EFECTO DE ESTE COBRO LLEGÓ A APLICARSE?
+        // DID THIS CHARGE'S EFFECT ACTUALLY APPLY?
         //
-        // La `Transaction` es el candado de idempotencia, y hasta acá sólo decía
-        // "este pago ya se registró". No decía si el PLAN llegó a otorgarse, y esa
-        // diferencia resuelve dos problemas que parecían separados:
+        // `Transaction` is the idempotency lock but only said "this payment was
+        // recorded", not whether the PLAN was granted. That difference fixes two
+        // things: the `already` path re-applied the plan on a 11000 (curing a
+        // half-applied grant but also undoing a human revocation, e.g. a
+        // chargeback refund); now it re-applies only if the effect NEVER applied.
+        // And "charged but not applied" is queryable:
+        // `Transaction.find({ type: 'Subscription', applied: false })`.
         //
-        // 1. **El camino `already` revertía la palanca del admin.** Ante un 11000
-        //    se re-aplicaba el plan sin condición —lo cual cura una acreditación
-        //    que murió a mitad— pero también deshacía una revocación humana: se
-        //    revocaba un Premium por contracargo y la siguiente re-entrega de la
-        //    pasarela lo devolvía, de por vida y en silencio. Con esta marca, el
-        //    `already` sólo re-aplica si el efecto NUNCA llegó a aplicarse.
-        //
-        // 2. **"Se cobró y no se aplicó" no quedaba en ningún lado consultable.**
-        //    El único rastro era un `console.error`. La palanca del dashboard
-        //    existe para reparar justamente esos casos, pero no había forma de
-        //    ENCONTRARLOS salvo grepear logs. Ahora es una consulta:
-        //    `Transaction.find({ type: 'Subscription', applied: false })`.
-        //
-        // Las transacciones anteriores a este campo no lo tienen, y eso está bien:
-        // `applied !== true` las trata como "no confirmado", que es exactamente lo
-        // que son.
+        // Older transactions lack this field, which is fine: `applied !== true`
+        // treats them as "unconfirmed", exactly what they are.
         applied: {
             type: Boolean,
             default: false,
         },
-        // Se cobró pero el plan NO se pudo aplicar (ya tenías uno igual o mayor,
-        // o venía de un checkout viejo). Distingue este caso de "la acreditación
-        // murió a mitad": sin esta marca, un reintento de la pasarela entraba por
-        // el camino `already` y re-aplicaba el plan, sacando el pago de la lista
-        // de reembolsos. `Transaction.find({ type:'Subscription', refundPending:true })`
-        // es la lista de plata a devolver a mano.
+        // Charged but the plan could NOT be applied (already had an equal/greater
+        // one, or it came from an old checkout). Distinguishes this from "the
+        // grant died mid-way": without it a gateway retry entered the `already`
+        // path and re-applied the plan, dropping the payment from the refund list.
+        // `Transaction.find({ type:'Subscription', refundPending:true })` is the
+        // list of money to refund manually.
         refundPending: {
             type: Boolean,
             default: false,

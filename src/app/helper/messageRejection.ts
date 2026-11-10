@@ -1,12 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// Sin importaciones de runtime a propósito: `import type` se borra al compilar,
-// así que estos dos rechazos se pueden probar sin arrastrar los modelos ni el
-// logger. Las dos ramas del envío (socket y REST) arman acá su payload de error.
+// Type-only imports on purpose: `import type` erases at compile time, so these
+// rejections are testable without loading models or the logger. Both transports
+// (socket and REST) build their error payload here.
 import type { SafetyResult } from './isTextSafe';
 import type { AttachmentPartition } from './attachmentUrl';
 
-// Mismo payload para los dos transportes: el socket lo pasa a `emitError` y REST
-// toma `code` como estado HTTP y `message` como texto del `AppError`.
+// Same payload for both transports: the socket forwards it to `emitError`, REST
+// uses `code` as HTTP status and `message` as the `AppError` text.
 export type ErrorPayload = {
     code: number;
     message: string;
@@ -14,9 +14,8 @@ export type ErrorPayload = {
     details: unknown;
 };
 
-// Rechazo por contenido. El `details` es OBJETO (no string) para que el cliente
-// ubique y borre la burbuja optimista EXACTA por su clientId, o por texto si es un
-// cliente viejo que no mandó `clientId`.
+// Content rejection. `details` is an OBJECT so the client can remove the exact
+// optimistic bubble by clientId, or by text for older clients that omit it.
 export const moderationFailure = (
     msgText: string,
     verdict: SafetyResult,
@@ -37,9 +36,9 @@ export const moderationFailure = (
               },
           };
 
-// Rechazo de un mensaje que SOLO tenía adjuntos y ninguno pasó el filtro del CDN:
-// guardarlo era una burbuja vacía e irrecuperable, porque el archivo ya se perdió.
-// Si además trajo texto, el texto sí viaja (no se devuelve nada).
+// Rejection for a message with only attachments and none passing the CDN filter:
+// storing it left an empty, unrecoverable bubble since the file was lost. If text
+// is present it still goes through (nothing returned).
 export const emptyMessageFailure = (
     msgText: string,
     attachments: AttachmentPartition,
@@ -58,7 +57,7 @@ export const emptyMessageFailure = (
         code: 400,
         message: 'Attachment not accepted',
         type: 'general',
-        // `clientId` para que el cliente marque ESA burbuja como fallada.
+        // `clientId` so the client can mark THAT bubble as failed.
         details: {
             kind: 'empty_message',
             clientId,

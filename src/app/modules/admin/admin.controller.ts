@@ -5,7 +5,6 @@ import sendResponse from '../../utilities/sendResponse';
 import AdminServices from './admin.services';
 import { getCloudFrontUrl } from '../../helper/mutler-s3-uploader';
 
-// register Admin
 const createAdmin = catchAsync(async (req, res) => {
     const result = await AdminServices.createAdmin(req.body);
     sendResponse(res, {

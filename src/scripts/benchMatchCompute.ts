@@ -17,7 +17,7 @@ const LABEL =
     (process.env.BENCH_LABEL || '').trim() || (MODE === 'knn' ? 'knn' : 'vector');
 const SNAP_TTL_MS = Number(process.env.MATCH_KNN_SNAPSHOT_TTL_MS ?? 3000);
 
-/** Percentil por rango más cercano, sobre una copia (no muta el original). */
+/** Nearest-rank percentile over a copy (doesn't mutate the input). */
 const pct = (arr: number[], p: number): number => {
     if (!arr.length) return 0;
     const a = [...arr].sort((x, y) => x - y);
@@ -70,7 +70,7 @@ const main = async (): Promise<void> => {
         const userId = (bond.user?._id || bond.user)?.toString();
         if (!userId) continue;
 
-        // Warm-up (descartado): calienta el snapshot kNN y el JIT.
+        // Warm-up (discarded): warms the kNN snapshot and the JIT.
         await computeMatchesForBond({ ...bond }, userId);
 
         let records: any[] = [];

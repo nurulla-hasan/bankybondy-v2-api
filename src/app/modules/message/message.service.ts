@@ -13,11 +13,9 @@ import {
     getBlockedObjectIdsFor,
 } from '../userBlock/userBlock.service';
 
-// Construye un ObjectId validando ANTES. `new mongoose.Types.ObjectId('abc')`
-// tira BSONError, que NO es CastError y por lo tanto NO lo atrapa ninguna rama
-// del globalErrorHandler → salía 500 en vez de 400. (Ojo: con `undefined` no
-// tira: genera un id NUEVO al azar, que es peor todavía porque el `$match` no
-// falla, simplemente no matchea nada en silencio.)
+// Validate before constructing: `new ObjectId('abc')` throws BSONError, which is
+// not CastError and escaped globalErrorHandler as a 500. With `undefined` it
+// silently generates a random id, which is worse (matches nothing).
 const toObjectId = (value: unknown, label: string): mongoose.Types.ObjectId => {
     const id = String(value || '');
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -31,9 +29,8 @@ const getMessages = async (
     query: Record<string, unknown>
 ) => {
     let conversationId;
-    // Preferimos el id directo de la conversacion cuando el front lo manda: sirve
-    // para CUALQUIER chat, incluidos grupos de vinculo cuyo bond fue borrado (que
-    // no tienen bondLinkId para resolverse). Antes esos chats no cargaban mensajes.
+    // Prefer the explicit conversation id: works for any chat, including bond groups
+    // whose bond was deleted (no bondLinkId to resolve from).
     if (query.conversationId) {
         conversationId = String(query.conversationId);
         const conversationObjectId = toObjectId(
@@ -58,14 +55,9 @@ const getMessages = async (
             type: ENUM_CONVERSATION_TYPE.oneToOne,
         });
         if (!conversation) {
-            // Conversación 1-a-1 que TODAVÍA no existe: llegaste desde Personas/un
-            // perfil y aún no escribiste el primer mensaje. NO es un error, solo no
-            // hay mensajes. Antes tiraba 404 → el front lo pintaba como "Error al
-            // cargar los mensajes" y ese branch tapaba la burbuja optimista del
-            // mensaje recién enviado (había que reabrir el chat desde la lista para
-            // que cargara por conversationId). Devolvemos una página vacía con el
-            // mismo shape; al enviar el primer mensaje se crea la conversación y el
-            // refetch (invalidación de CONVERSATIONS) ya trae el historial real.
+            // 1-to-1 conversation that does not exist yet (no first message sent). Not an
+            // error: return an empty page. A 404 here was painted as "Error loading
+            // messages" and hid the optimistic bubble of a just-sent message.
             const page = clampPage(query.page);
             const limit = clampLimit(query.limit, 10, 100);
             return { meta: { page, limit, total: 0, totalPages: 0 }, result: [] };
@@ -102,18 +94,13 @@ const getMessages = async (
     }
 
     const page = clampPage(query.page);
-    // R3 (Tanda 0): cap del limit (anti-DoS). Antes `limit=999999` traía TODO el
-    // historial en una sola query. Ahora por el helper común, que ademas pone piso:
-    // `?page=-3` daba un `$skip` NEGATIVO y Mongo lo rechaza → era un 500.
+    // R3 (Tanda 0): cap the limit (anti-DoS); the shared helper also sets a floor —
+    // `?page=-3` produced a NEGATIVE $skip, which Mongo rejects with a 500.
     const limit = clampLimit(query.limit, 10, 100);
 
-    // Sin NINGÚN id resoluble (ni conversationId, ni userId, ni chatGroupId, ni
-    // bondLinkId) no hay conversación que consultar. ChatGPT proponía tirar 400 acá,
-    // pero eso CAMBIA EL CONTRATO: hoy este request devuelve 200 con página vacía
-    // (abajo, `new ObjectId(undefined)` genera un id al azar que no matchea nada), y
-    // la app nativa no está en este repo para comprobar que no dependa de eso.
-    // Devolvemos el MISMO shape vacío que ya usa la rama de "conversación 1-a-1 que
-    // todavía no existe", pero cortando antes de pegarle a Mongo al pedo.
+    // With no resolvable id there is no conversation to query. Returning 400 would
+    // change the contract (today it is a 200 with an empty page), so we return the
+    // same empty shape without hitting Mongo.
     if (!conversationId) {
         return { meta: { page, limit, total: 0, totalPages: 0 }, result: [] };
     }
@@ -121,10 +108,8 @@ const getMessages = async (
     const skip = (page - 1) * limit;
     const searchTerm = (query?.searchTerm as string) || '';
 
-    // El bloqueo alcanza a los grupos: los mensajes cuyo autor esta en relacion
-    // de bloqueo con quien mira (en cualquier sentido) se ocultan, incluso
-    // dentro de un grupo compartido. En los 1-a-1 la conversacion ya no aparece
-    // en la lista, asi que filtrar sus mensajes no cambia lo visible.
+    // Blocking also applies to groups: messages whose author is in a block relation
+    // with the viewer (either direction) are hidden, even inside a shared group.
     const blockedObjectIds = await getBlockedObjectIdsFor(profileId);
 
     const messages = await Message.aggregate(
@@ -156,24 +141,20 @@ const getMessages = async (
 };
 
 /**
- * Conteo total de mensajes NO leidos del usuario (B.5).
- * Un mensaje cuenta como no leido si: pertenece a una conversacion donde el
- * usuario participa, NO lo envio el propio usuario, y su id no esta en `seenBy`.
- * Devuelve tambien el desglose por conversacion para pintar badges.
+ * Total UNREAD message count for a user (B.5): messages in the user's conversations
+ * not sent by them and not in `seenBy`. Also returns a per-conversation breakdown
+ * for badges.
  */
 const getUnreadMessageCount = async (profileId: string) => {
-    // Mismo criterio que `getMessages`: un profileId malformado tiraba BSONError
-    // → 500, y uno `undefined` generaba un id NUEVO al azar → el badge quedaba
-    // clavado en 0 para siempre, sin ningún error visible.
+    // Same as `getMessages`: a malformed profileId threw BSONError → 500, and an
+    // `undefined` one generated a random id → badge stuck at 0 with no error.
     const uid = toObjectId(profileId, 'profile id');
 
-    // Ids bloqueados (en cualquier sentido): sus conversaciones 1-a-1 NO
-    // aparecen en la lista de chats, asi que tampoco deben contar para el badge.
-    // Esta era una causa del "badge fantasma": numero rojo sin ninguna
-    // conversacion no-leida visible.
+    // Blocked ids (either direction): their 1-to-1 chats are not listed, so they must
+    // not count for the badge either — that caused the "phantom badge".
     const blockedIds = new Set(await getBlockedIdsFor(profileId));
 
-    // Conversaciones donde participa el usuario, que NO oculto (hiddenBy).
+    // Conversations the user takes part in and did not hide (hiddenBy).
     const conversations = await Conversation.find({
         participants: uid,
         hiddenBy: { $ne: uid },
@@ -181,8 +162,8 @@ const getUnreadMessageCount = async (profileId: string) => {
         .select('_id type participants')
         .lean();
 
-    // Excluir las 1-a-1 con usuarios bloqueados (mismo criterio que la lista de
-    // chats), para que badge y lista siempre coincidan.
+    // Exclude 1-to-1 chats with blocked users (same rule as the chat list) so badge
+    // and list always agree.
     const visibleConversations = conversations.filter((c: any) => {
         if (c.type !== ENUM_CONVERSATION_TYPE.oneToOne) return true;
         const otherId = (c.participants || [])
@@ -214,9 +195,8 @@ const getUnreadMessageCount = async (profileId: string) => {
         },
     ]);
 
-    // El badge cuenta CUANTOS chats/grupos tienen mensajes nuevos (no la suma de
-    // mensajes). Asi el numero rojo coincide 1-a-1 con las conversaciones en
-    // negrita de la lista.
+    // The badge counts HOW MANY chats/groups have new messages (not the message sum)
+    // so the number matches the bolded conversations in the list.
     const totalUnread = perConversation.length;
 
     return {
@@ -246,7 +226,6 @@ const deleteMessage = async (messageId: string, userId: string) => {
     );
     return result;
 };
-// make changes-----------------------------------
 
 const MessageService = {
     getMessages,

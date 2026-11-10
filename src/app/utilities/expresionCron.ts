@@ -1,17 +1,14 @@
 import cron from 'node-cron';
 import { errorLogger } from '../shared/logger';
 
-/** La expresión de cron de una variable de entorno, SIEMPRE válida.
+/** Cron expression from an env var, ALWAYS valid.
  *
- *  Con una expresión mal escrita, `cron.schedule` lanza SINCRÓNICO (node-cron
- *  3.0.3, medido el 29/9). Los barridos arrancan dentro del `main()` del worker,
- *  cuyo catch hace `process.exit(1)`: el matcher entraba en un bucle de reinicios
- *  y la cola dejaba de consumirse. Tampoco sirve un try/catch que siga de largo:
- *  deja el barrido APAGADO y el proceso "sano" por fuera, que es la clase de
- *  falla que tuvo tres vínculos 61 días sin recomputarse.
- *
- *  Acá: si la del .env no valida, queda el error en el log y se usa la de por
- *  defecto. Vacía o ausente = la de por defecto, igual que el `||` de antes. */
+ *  A malformed expression makes `cron.schedule` throw synchronously (node-cron
+ *  3.0.3); sweeps start inside the worker's `main()`, whose catch exits the
+ *  process, so the matcher entered a restart loop. Swallowing the error is worse:
+ *  it leaves the sweep OFF while the process looks healthy.
+ *  Here an invalid env value is logged and the default is used; empty/missing
+ *  also falls back to the default. */
 export const expresionCron = (variable: string, porDefecto: string): string => {
     const valor = process.env[variable];
     if (!valor) return porDefecto;

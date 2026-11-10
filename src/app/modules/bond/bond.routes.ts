@@ -17,9 +17,8 @@ router.post(
 router.get('/my-bonds', auth(USER_ROLE.user), bondController.getAllBonds);
 router.get(
     '/get-single-bond/:id',
-    // Antes SIN auth → IDOR público: con un id se leía el bond + el perfil del
-    // dueño (populate('user')). Se exige sesión (consistente con el resto de
-    // /bond) y el service ya recorta el populate a name/profile_image.
+    // Session required: this was public, so any id leaked the bond plus the owner
+    // profile (populate 'user'). The service narrows that populate.
     auth(USER_ROLE.user),
     bondController.getSingleBond
 );
@@ -29,10 +28,9 @@ router.get(
     bondController.getFilterItemsForMatchingBond
 );
 
-// PARKEADO: editar un vínculo está PROHIBIDO (crashea, y el producto lo
-// descartó). Se corta el acceso HTTP y nada más: el controller, el service y la
-// validación quedan INTACTOS. Reactivar = borrar este handler y descomentar el
-// bloque de abajo ("solo cablear"), igual que los módulos parkeados del router.
+// PARKED: editing a bond link is forbidden (it crashes; product dropped it). Only HTTP
+// access is cut — controller, service and validation stay intact. Re-enable by
+// deleting this handler and uncommenting the block below ("wire only").
 router.patch('/update/:id', (_req, res) => {
     res.status(403).json({
         success: false,

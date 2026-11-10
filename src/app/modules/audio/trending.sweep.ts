@@ -1,14 +1,7 @@
-/* E1: recomputo periódico del "trending" (lo que sube). Recalcula `trendingScore`
- * de los audios `ready` a partir de señales REALES:
- *   - escuchas calificadas + completion promedio (eventos AudioListen, de E0)
- *   - guardados (AudioBookmark) — señal costosa
- *   - frescura (edad del audio) — oxigena lo nuevo
- * La fórmula vive en audio.trending.ts (pura/testeable). Corre en el worker (cron).
- *
- * Se recomputa TODO lo visible en cada corrida (no solo lo que tuvo escuchas nuevas)
- * porque la frescura decae con la edad → el score de un audio baja aunque no cambie
- * su engagement. Escala con la cantidad de audios `ready`; si crece mucho, conviene
- * pasar a un pipeline de agregación con $merge (nota para el 2º tramo de E1).
+/* E1: periodic "trending" recompute. Recalculates `trendingScore` of `ready`
+ * audios from real signals: qualified listens + completion, bookmarks, freshness.
+ * The formula lives in audio.trending.ts (pure/testable); this runs in the worker.
+ * Everything visible is recomputed because freshness decays with age.
  */
 import cron from 'node-cron';
 import { expresionCron } from '../../utilities/expresionCron';
@@ -18,11 +11,11 @@ import AudioBookmark from '../audioBookmark/audio.bookmark.model';
 import { ENUM_AUDIO_MODERATION_STATUS } from './audio.interface';
 import { computeTrendingScore } from './audio.trending';
 
-const CRON = expresionCron('TRENDING_SWEEP_CRON', '*/15 * * * *'); // cada 15 min
+const CRON = expresionCron('TRENDING_SWEEP_CRON', '*/15 * * * *'); // every 15 min
 const ENABLED = process.env.TRENDING_SWEEP_ENABLED !== 'false';
 
 export const runTrendingRecomputeOnce = async (): Promise<number> => {
-    // 1) Señales de escucha por audio (todas las de E0).
+    // 1) Listen signals per audio.
     const listenAgg = await AudioListen.aggregate(
         [
             {
@@ -46,11 +39,9 @@ export const runTrendingRecomputeOnce = async (): Promise<number> => {
         });
     }
 
-    // 2) Guardados por audio, pero SOLO los de gente que ADEMÁS escuchó calificado
-    // ese audio → el bookmark vuelve a ser "escuchó Y guardó" (señal costosa de
-    // verdad) y no un tap barato de brigadeo. Excluye al dueño de yapa: no puede
-    // escuchar su propio audio (recordListen lo descarta) → no tiene AudioListen →
-    // su guardado no cuenta. Cierra el auto-inflado y el vector de brigadeo.
+    // 2) Bookmarks only from users who also listened to that audio: a genuinely
+    // costly signal. The owner can't listen to their own audio, so self-inflation
+    // and brigading don't count.
     const bmAgg = await AudioBookmark.aggregate(
         [
             {
@@ -81,7 +72,7 @@ export const runTrendingRecomputeOnce = async (): Promise<number> => {
     const bmMap = new Map<string, number>();
     for (const r of bmAgg) bmMap.set(String(r._id), r.bookmarks || 0);
 
-    // 3) Recalcular el score de cada audio visible.
+    // 3) Recompute the score of every visible audio.
     const audios = await Audio.find({
         moderationStatus: ENUM_AUDIO_MODERATION_STATUS.READY,
         isBlocked: false,
@@ -113,9 +104,9 @@ export const runTrendingRecomputeOnce = async (): Promise<number> => {
 };
 
 let scheduled = false;
-// Anti-solape: si una corrida se demora más que el intervalo, no arrancar otra.
+// Anti-overlap: skip a run while the previous one is still going.
 let running = false;
-/** Registra el cron del recomputo de trending (idempotente). Llamar al arrancar. */
+/** Registers the trending cron (idempotent). Call at startup. */
 export const startTrendingSweep = (): void => {
     if (!ENABLED) {
         logger.info(

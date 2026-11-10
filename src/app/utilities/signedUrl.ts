@@ -1,8 +1,8 @@
 /* eslint-disable no-console */
 import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
 
-// Firma una URL de CloudFront si hay key pair configurado; si no,
-// devuelve la URL directa (comportamiento actual, sin romper nada).
+// Signs a CloudFront URL when a key pair is configured; otherwise returns the
+// direct URL unchanged.
 export const getMediaUrl = (url?: string): string => {
     if (!url) return url ?? '';
     const keyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
@@ -10,12 +10,12 @@ export const getMediaUrl = (url?: string): string => {
     if (!keyPairId || !privateKey) return url;
     try {
         const dateLessThan = new Date(
-            Date.now() + 60 * 60 * 1000 // válida 1 hora
+            Date.now() + 60 * 60 * 1000 // valid 1 hour
         ).toISOString();
         return getSignedUrl({
             url,
             keyPairId,
-            // permite pegar la clave con \n escapados en el .env
+            // allows the key to be pasted with escaped \n in .env
             privateKey: privateKey.replace(/\\n/g, '\n'),
             dateLessThan,
         });

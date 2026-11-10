@@ -1,7 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 
-// Elimina claves con operadores Mongo ($) o rutas con punto (.) para
-// prevenir NoSQL injection y mass-assignment vía query/body/params.
+// Strips `$` keys and dotted paths to block NoSQL injection and mass-assignment.
 const isForbiddenKey = (key: string): boolean =>
     key.startsWith('$') || key.includes('.');
 

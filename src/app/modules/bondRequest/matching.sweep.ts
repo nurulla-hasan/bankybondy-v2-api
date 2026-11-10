@@ -1,15 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Sweep periódico del matcheo: descubre ciclos y refresca cachés vencidas.
- *
- * La invalidación por-bond (create/update/link/delete) refresca lo puntual,
- * pero los ciclos nuevos pueden surgir por combinaciones que ningún bond
- * individual "dispara". Este barrido recorre, de a lotes acotados, los bonds
- * activos cuya AGENDA ya venció y encola su recomputo. Así el descubrimiento de
- * ciclos ocurre a nivel de todo el grafo, distribuido en el tiempo.
- *
- * Acotado y opt-in: por defecto sólo corre si hay REDIS_URL (worker distribuido).
- * Sin Redis se puede forzar con MATCH_SWEEP_ENABLED=true (usa recomputo inline).
- */
+/* Periodic matching sweep: finds cycles that no single bond write triggers by
+ * enqueueing recompute for active bonds whose agenda expired, in bounded batches. */
 import cron from 'node-cron';
 import { expresionCron } from '../../utilities/expresionCron';
 import config from '../../config';
@@ -25,60 +16,31 @@ const SWEEP_ENABLED =
         .toLowerCase() === 'true';
 const SWEEP_CRON = expresionCron('MATCH_SWEEP_CRON', '*/5 * * * *');
 
-// ESCALA: el lote sube de 200 a 1.500. Con 12 barridos por hora eso son 18.000
-// recomputos/hora, contra los 2.400 de antes. La aritmética de por qué 18.000
-// alcanza para ~100.000 vínculos activos (y 2.400 no) está en matching.schedule.ts.
+// 1500 per sweep x 12 sweeps/hour = 18k enqueues/h. Real end-to-end capacity is
+// the MIN of that and compute capacity (`MATCHER_CONCURRENCY` x
+// `MATCH_WORKER_CONCURRENCY`), so 18k only holds with a scaled worker.
 //
-// ⚠️ PRECISIÓN QUE CORRIGE UNA AFIRMACIÓN NUESTRA (panel del 11/9). Esos 18.000
-// son capacidad de ENCOLADO: miden la canilla, no el desagüe. La capacidad de
-// CÓMPUTO es `MATCHER_CONCURRENCY` × `MATCH_WORKER_CONCURRENCY`, y con los
-// defaults (1 × 4) son CUATRO recomputos simultáneos: sostener 16.200/h pediría
-// que cada job durara ≤0,89 s incluyendo búsqueda vectorial contra Atlas. La
-// capacidad real punta a punta es el MÍNIMO de las dos, y esta tanda sólo movió
-// la primera. Decir "ahora aguanta 100.000 vínculos" es verdad sólo con el worker
-// escalado, y eso se enciende con una medición (la prueba de carga), no con un
-// comentario.
-//
-// Segunda precisión, sobre el mix esperado: el 10/20/70 de matching.schedule.ts
-// supone régimen MADURO. Una plataforma que recién lanza tiene la mayoría de sus
-// vínculos creados en los últimos 3 días, o sea CALIENTES. Con 25% calientes la
-// demanda sube a ~29.400/h y no entra. No se cae nada —la contrapresión hace que
-// la agenda se atrase y el sistema degrade parejo— pero conviene saber que el
-// margen del arranque es más flaco que el del régimen.
-//
-// El tope duro de 20.000 acota el peor caso de un env mal puesto: encolar 100.000
-// jobs de una sentada es una forma elegante de tirar Redis.
+// Hard cap of 20k bounds a bad env: enqueueing 100k jobs at once kills Redis.
 const SWEEP_BATCH = Math.min(
     Math.max(Number(process.env.MATCH_SWEEP_BATCH) || 1500, 1),
     20000
 );
 
-// CONTRAPRESIÓN. Si el worker viene atrasado, seguir encolando NO agrega
-// capacidad: cambia un techo por una cola infinita. Por encima de este umbral el
-// sweep no encola nada y espera la próxima vuelta: los vínculos no se pierden, su
-// agenda ya venció y siguen siendo elegibles.
-//
-// CORRECCIÓN de una versión anterior de este comentario, que decía que cada job
-// de más "retrasa a los de prioridad ALTA que dispara el usuario (entran detrás
-// de la montaña)". ES FALSO: acá se encola SIEMPRE con prioridad explícita, los
-// jobs viven en el set `prioritized` de BullMQ, y uno de prioridad 1 se adelanta
-// a los 4.500 de prioridad 100 — espera a lo sumo los que estén activos. La
-// contrapresión igual corresponde, pero por los motivos REALES: acota la memoria
-// de Redis y la presión sostenida sobre Atlas.
+// Backpressure: past this threshold the sweep enqueues nothing and waits for the
+// next round; links are not lost, their agenda already expired and they stay
+// eligible. Jobs always carry explicit priority, so this bounds Redis memory and
+// Atlas pressure, not user-facing latency.
 const SWEEP_MAX_BACKLOG = Math.max(
     Number(process.env.MATCH_SWEEP_MAX_BACKLOG) || SWEEP_BATCH * 3,
     1
 );
 
-/** Encola el recomputo de un lote de bonds activos con la agenda vencida.
- *  Devuelve cuántos encoló (0 si frenó por contrapresión). */
+/** Enqueues recompute for one batch of active bonds with an expired agenda.
+ *  Returns how many were enqueued (0 when stopped by backpressure). */
 export const runSweepOnce = async (): Promise<number> => {
-    // CONTRAPRESIÓN antes de consultar Mongo: si la cola ya está llena, ni
-    // siquiera vale la pena pagar la query.
-    //
-    // `null` = no se pudo saber (sin Redis, o Redis con hipo). Se sigue adelante
-    // a propósito: sin Redis el modo es inline y acotado por `inlineRunning`, y
-    // frenar el sweep ante un blip de Redis sería peor que encolar de más.
+    // Backpressure before querying Mongo: with the queue full the query is wasted.
+    // `null` = unknown (no Redis, or Redis hiccup); continue on purpose, since the
+    // inline mode is already bounded by `inlineRunning`.
     const pendientes = await contarPendientes();
     if (pendientes !== null && pendientes >= SWEEP_MAX_BACKLOG) {
         logger.warn(
@@ -88,8 +50,7 @@ export const runSweepOnce = async (): Promise<number> => {
         return 0;
     }
 
-    // No encolar más de lo que entra bajo el umbral: si faltan 300 para el techo,
-    // se encolan 300 y no 1.500.
+    // Never enqueue past the threshold: with 300 slots left, enqueue 300, not 1500.
     const cupo =
         pendientes === null
             ? SWEEP_BATCH
@@ -98,58 +59,35 @@ export const runSweepOnce = async (): Promise<number> => {
 
     const ahora = new Date();
 
-    // TTL ADAPTATIVO: se filtra por la AGENDA (`matchesNextAt`), no por la
-    // historia (`matchesComputedAt`).
+    // Adaptive TTL: filter by the agenda (`matchesNextAt`), not by history
+    // (`matchesComputedAt`). No policy here, just reading what each link was
+    // assigned at compute time (see matching.schedule.ts).
     //
-    // Por qué la agenda y no el TTL uniforme de antes: con un solo TTL, un vínculo
-    // parado hace tres semanas se recalculaba cada hora igual que uno recién
-    // creado, y eso techaba el sistema en ~800 usuarios. Ahora cada vínculo trae
-    // escrito CUÁNDO le toca, decidido por su temperatura al momento de
-    // computarlo (ver matching.schedule.ts). Acá no hay política: sólo se lee la
-    // agenda. Una consulta, un índice.
+    // Query shaped so the index also provides the ORDER: otherwise Mongo adds a
+    // blocking SORT (32 MB cap over ~40 KB docs, ~60 MB at batch 1500), the catch
+    // below swallows it, and nothing is ever recomputed again, silently.
+    // Everything before the sort key must be EQUALITY: `isLinked: false` and not
+    // `{$ne: true}`, `$lte` and not a `$or` with `$exists: false` (hence the
+    // AGENDA_VENCIDA sentinel instead of an absent field).
     //
-    // ⚠️ ESTA CONSULTA ESTÁ ESCRITA PARA QUE EL ÍNDICE PROVEA TAMBIÉN EL ORDEN.
-    // No es cosmético: es lo que evita un SORT BLOQUEANTE, que tiene tope duro de
-    // 32 MB sin `allowDiskUse`, sobre documentos de ~40 KB (los dos vectores de
-    // 1536 dims; BSON guarda como texto la clave de cada elemento). Con el lote
-    // de 1.500 eso son ~60 MB: el sweep tiraría
-    // `Sort exceeded memory limit`, lo comería el `catch` de abajo, devolvería 0,
-    // y NADIE SE RECOMPUTARÍA NUNCA MÁS, en silencio. (Panel del 11/9.)
-    //
-    // Para que el índice {status, isPause, isLinked, matchesNextAt} dé filtro Y
-    // orden, TODO lo anterior a la clave de orden tiene que ser IGUALDAD:
-    //   · `isLinked: false` y no `{$ne: true}` — un `$ne` produce bounds
-    //     multi-intervalo y rompe la propiedad. La migración de arranque
-    //     (`backfillAgendaMatcheo`) garantiza que el campo esté presente en todos.
-    //   · `matchesNextAt: {$lte}` y no un `$or` con `$exists: false` — un `$or`
-    //     sobre la clave de orden también la rompe. Por eso el campo tiene
-    //     centinela (AGENDA_VENCIDA) en vez de estar ausente.
-    //
-    // Se conserva el FIX de cómputo desbocado: la elegibilidad la marca un campo
-    // del propio BondRequest, no la existencia de filas en BondMatch. Un bond SIN
-    // matches no crea ninguna fila, así que con el criterio viejo nunca figuraba
-    // como fresco y se recomputaba en CADA sweep, para siempre.
+    // Eligibility comes from a BondRequest field, not from BondMatch rows: a bond
+    // with no matches creates no rows and would be recomputed forever.
     const batch = await BondRequest.find({
         status: ENUM_BOND_REQUEST_STATUS.WAITING_FOR_LINK,
         isPause: false,
         isLinked: false,
         matchesNextAt: { $lte: ahora },
     })
-        // Los más vencidos primero. Los nunca computados y los recién
-        // invalidados llevan el centinela (época), así que encabezan solos.
+        // Most overdue first; never-computed and just-invalidated links carry the
+        // epoch sentinel, so they lead on their own.
         .sort({ matchesNextAt: 1 })
         .limit(cupo)
         .select('_id matchesNextAt')
         .lean();
 
-    // INSTRUMENTO: cuánto lleva esperando el vínculo más atrasado. Distingue "no
-    // había nada que recomputar" de "hay algo que no se está recomputando": así
-    // estuvieron tres vínculos 61 días sin que nadie lo viera (la cola BullMQ no
-    // lo habría mostrado: nunca llegaban a encolarse). Sale en cada vuelta que
-    // llega a consultar, también con 0; si la contrapresión frena antes, la línea
-    // de la pausa ocupa su lugar. Los que tienen el centinela (nunca computados o
-    // recién invalidados) se cuentan aparte: su "edad" sería desde 1970. Si
-    // llenaron el cupo, el más atrasado con agenda real quedó fuera del lote.
+    // Instrumentation: age of the most overdue link, telling "nothing to do" apart
+    // from "something is not being recomputed". Sentinel rows are counted
+    // separately, since their age would read from 1970.
     const centinela = +agendaVencida();
     const sinComputar = (batch as any[]).filter(
         (b) => +new Date(b.matchesNextAt) === centinela
@@ -174,13 +112,12 @@ export const runSweepOnce = async (): Promise<number> => {
 };
 
 let scheduled = false;
-// Anti-solape: node-cron NO espera a que termine una corrida antes de disparar la
-// siguiente. Con lote 1.500, la consulta + el encolado ya no son instantáneos, y
-// dos corridas solapadas encolarían el mismo lote dos veces. La deduplicación por
-// `jobId` lo absorbería, pero pagar la consulta dos veces no tiene sentido.
+// Anti-overlap: node-cron does not wait for a run to finish. With batch 1500 the
+// query plus enqueue is no longer instant, and two overlapping runs would pay for
+// the same query twice (`jobId` dedup would absorb the jobs, not the cost).
 let running = false;
 
-/** Registra el cron del sweep (idempotente). Llamar una vez al arrancar. */
+/** Registers the sweep cron (idempotent). Call once at startup. */
 export const startMatchingSweep = (): void => {
     if (!SWEEP_ENABLED) {
         logger.info(
@@ -191,14 +128,12 @@ export const startMatchingSweep = (): void => {
     if (scheduled) return;
     scheduled = true;
     cron.schedule(SWEEP_CRON, async () => {
-        // Red de `hasActiveBonds` (orden de Personas): repara lo que se haya
-        // escapado de los recálculos por escritura. ANTES del anti-solape y
-        // aparte del sweep: con Redis caído `contarPendientes` espera sin límite
-        // (`maxRetriesPerRequest: null`), `running` queda en true y todo lo que
-        // esté después no corre más. Loguea sólo cuando corrige algo: una
-        // corrección suelta puede ser una carrera con una escritura del mismo
-        // instante (la arregla la vuelta siguiente); correcciones en cada vuelta
-        // sí son un bug.
+        // Safety net for `hasActiveBonds` (Person order): repairs anything the
+        // write-time recompute missed. Runs BEFORE the anti-overlap guard and apart
+        // from the sweep, because with Redis down `contarPendientes` waits forever
+        // (`maxRetriesPerRequest: null`) and would leave `running` stuck at true.
+        // Logs only when it corrects something: a single fix can be a race with a
+        // concurrent write (the next round settles it), fixes every round are a bug.
         try {
             const r = await reconciliarVinculosVivos();
             if (r.encendidos || r.apagados) {
@@ -212,7 +147,7 @@ export const startMatchingSweep = (): void => {
                 (e as Error)?.message
             );
         }
-        if (running) return; // la corrida anterior sigue: no solapar
+        if (running) return; // previous run still going: do not overlap
         running = true;
         try {
             const n = await runSweepOnce();

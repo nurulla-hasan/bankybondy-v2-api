@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { isValidFeelingTag } from './feelingTags';
 
-// Feedback del oyente: texto opcional (<=500) y/o feeling tags del vocabulario
-// controlado. Se rechaza solo si AMBOS vienen vacios (nada que guardar). La
-// validacion de subconjunto del vocabulario tambien se repite en el servicio.
+// Listener feedback: optional text (<=500) and/or controlled-vocabulary feeling
+// tags. Rejected only if BOTH are empty. Subset checks repeat in the service.
 export const giveAudioFeedbackValidationSchema = z.object({
     body: z
         .object({
@@ -37,8 +36,8 @@ export const createAudioValidationSchema = z.object({
         audioTopic: z.string().length(24, 'Invalid audioTopic ID'),
         title: z.string({ required_error: 'Title is required' }),
         description: z.string({ required_error: 'Description is required' }),
-        // URL ya staged por /upload-audio (subida en dos pasos). El controller
-        // valida host, prefijo del dueño y que no esté publicada.
+        // URL already staged by /upload-audio (two-step upload). The controller
+        // validates host, owner prefix and that it is not yet published.
         audio_url: z.string().optional(),
         cover_image: z.string().optional(),
         tags: z.array(z.string()).optional(),
@@ -46,12 +45,10 @@ export const createAudioValidationSchema = z.object({
     }),
 });
 
-// El chequeo "al menos un campo" NO se hace acá con un `.refine`: la validación
-// corre ANTES de que el controller inyecte `audio_url`/`cover_image` del archivo
-// subido, así que un update SÓLO-con-archivo (reemplazar el audio o la portada sin
-// tocar texto) llegaba con el body vacío y el refine lo rechazaba. El guard de
-// "hay algo para actualizar" se aplica en el service (`updateAudio`), que sí ve el
-// payload ya con la URL del archivo inyectada.
+// No "at least one field" `.refine` here: validation runs BEFORE the controller
+// injects `audio_url`/`cover_image` from the uploaded file, so a file-only update
+// arrived with an empty body and was rejected. That guard lives in the service
+// (`updateAudio`), which sees the payload after the URL injection.
 export const updateAudioValidationSchema = z.object({
     body: z.object({
         audioTopic: z.string().length(24).optional(),
@@ -63,8 +60,8 @@ export const updateAudioValidationSchema = z.object({
     }),
 });
 
-// Puntuación de un audio: entero de 1 a 5. Antes la ruta no validaba nada, así
-// que llegaban `rating` fuera de rango / no numéricos hasta el service.
+// Audio rating: integer 1..5. The route used to validate nothing, so out-of-range
+// or non-numeric `rating` reached the service.
 export const giveRatingValidationSchema = z.object({
     body: z.object({
         rating: z
@@ -75,7 +72,7 @@ export const giveRatingValidationSchema = z.object({
     }),
 });
 
-// E0: el player reporta cuánto se escuchó; el server decide si califica.
+// E0: the player reports how much was listened; the server decides if it counts.
 export const recordListenValidationSchema = z.object({
     body: z.object({
         secondsListened: z.number().min(0).optional(),

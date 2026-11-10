@@ -1,14 +1,11 @@
-/* Migración idempotente: antes del "rating en suspenso" (Tanda 2), TODA calificación
- * impactaba la reputación al instante. Al agregar `applied` (default false), las
- * calificaciones VIEJAS (sin el campo) quedarían sin contar → reputaciones a 0. Esto
- * marca `applied:true` a las de antes de la feature y recalcula las reputaciones
- * afectadas, para no regresar nada. Fire-and-forget; correrla N veces no cambia nada. */
+/* Idempotent migration: adds `applied:true` to ratings created before the field existed
+ * (they would stop counting) and recomputes affected reputations. Safe to re-run. */
 import BondRating from './bondRating.model';
 import { recomputeReputation } from './reputation.util';
 import { logger } from '../../shared/logger';
 
 export const applyExistingRatings = async (): Promise<void> => {
-    // Solo las que NO tienen `applied` (creadas antes de esta feature).
+    // Only ratings from before this feature (no `applied` field).
     const pending: any[] = await BondRating.find({
         applied: { $exists: false },
     })

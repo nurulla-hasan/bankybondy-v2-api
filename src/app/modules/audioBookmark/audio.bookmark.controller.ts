@@ -17,7 +17,6 @@ const audioBookmarkAddDelete = catchAsync(async (req, res) => {
         data: result,
     });
 });
-// get my bookmark
 const getMyBookmark = catchAsync(async (req, res) => {
     const result = await audioBookmarkServices.getMyBookmarkFromDB(
         req?.user?.profileId

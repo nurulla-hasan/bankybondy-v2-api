@@ -1,22 +1,9 @@
 /*
- * Vista previa del último mensaje (`lastMessage`), sin el contenido de un
- * mensaje borrado.
- *
- * POR QUÉ: `getMessages` ya anula text/imageUrl/videoUrl/pdfUrl cuando
- * `isDeleted` (ver message.pipeline.ts, marca M2), pero el listado de chats y el
- * evento `conversation` del socket entregaban el documento `lastMessage` CRUDO.
- * Resultado: borrar el mensaje más reciente borraba el mensaje pero dejaba su
- * texto entero en la lista de chats de la otra persona — y en su panel de
- * notificaciones — hasta que se abría el chat. Es el mismo dato, por otra puerta.
- *
- * Las claves se declaran UNA vez (`PREVIEW_KEYS` / `CONTENT_KEYS`) y de ahí salen
- * las dos implementaciones (etapa de agregación y función JS), porque si se
- * separan, una de las dos puertas empieza a filtrar y la otra no.
- *
- * `seenBy` y `__v` a propósito NO están en ninguna lista: `seenBy` nombra a todos
- * los que leyeron el mensaje (`get-messages` tampoco lo envía) y `__v` es
- * versión interna de mongoose. `isDeleted` y `_id` sí viajan, para que el
- * cliente pueda dibujar "Mensaje borrado" en vez de un hueco.
+ * Preview of `lastMessage` with deleted content stripped: the raw doc leaked
+ * deleted text into the other user's chat list and notifications. Keys come from
+ * PREVIEW_KEYS/CONTENT_KEYS so the aggregation stage and the JS path can't
+ * diverge. `seenBy`/`__v` stay out; `isDeleted`/`_id` travel so the client can
+ * render "Mensaje borrado".
  */
 const PREVIEW_KEYS = [
     '_id',
@@ -30,11 +17,11 @@ const CONTENT_KEYS = ['text', 'imageUrl', 'videoUrl', 'pdfUrl'] as const;
 
 type PreviewDoc = Record<string, any> | null | undefined;
 
-/** ¿Esto es una vista previa de un mensaje borrado? */
+/** Is this a preview of a deleted message? */
 const isDeletedPreview = (lastMessage: PreviewDoc): boolean =>
     Boolean(lastMessage) && (lastMessage as Record<string, any>).isDeleted === true;
 
-/** Etapa para el pipeline de agregación de `get-chat-list`. */
+/** Aggregation stage for `get-chat-list`. */
 export const scrubLastMessageStage = (): Record<string, any> => ({
     $addFields: {
         lastMessage: {
@@ -47,15 +34,15 @@ export const scrubLastMessageStage = (): Record<string, any> => ({
                     ...Object.fromEntries(CONTENT_KEYS.map((key) => [key, null])),
                     isDeleted: true,
                 },
-                // Nada que vaciar (o la conversación no tiene último mensaje):
-                // se conserva EXACTAMENTE lo que había, incluido `null`.
+                // Nothing to scrub (or no last message): keep exactly what was
+                // there, including `null`.
                 else: '$lastMessage',
             },
         },
     },
 });
 
-/** Versión JS para el payload del socket (`getSingleConversation`). */
+/** JS version for the socket payload (`getSingleConversation`). */
 export const scrubPreview = <T extends PreviewDoc>(lastMessage: T): T => {
     if (!isDeletedPreview(lastMessage)) return lastMessage;
 
@@ -67,7 +54,7 @@ export const scrubPreview = <T extends PreviewDoc>(lastMessage: T): T => {
     return scrubbed as T;
 };
 
-/** Un documento populado puede venir como string o como documento mongoose. */
+/** A populated doc may arrive as a string or a mongoose document. */
 export const toPlainPreview = (lastMessage: unknown): PreviewDoc => {
     if (!lastMessage) return null;
     const doc = lastMessage as { toObject?: () => Record<string, any> };

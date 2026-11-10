@@ -1,12 +1,9 @@
 import { z } from 'zod';
 import { MEDIOS_PAGO, TIPOS_SOLICITUD } from './consumidor.model';
 
-// Obligatorios SÓLO nombre y email: la Disp. 954/2025 prohíbe exigir "ningún otro
-// trámite adicional". El resto ayuda a encontrar el pago, pero si falta, el
-// pedido entra igual y se le pregunta después por mail (Disp. 3/2026: pasos
-// razonables, por medios habituales, sólo para verificar identidad).
-// Topes de longitud por la misma razón que en /contact-us: es un endpoint
-// público que manda mails.
+// Only nombre and email are required: Disp. 954/2025 bans extra paperwork. The
+// rest helps locate the payment but is asked later by email if missing.
+// Length caps for the same reason as /contact-us: public endpoint that sends mail.
 const crearSolicitudSchema = z.object({
     body: z.object({
         tipo: z.enum(TIPOS_SOLICITUD),

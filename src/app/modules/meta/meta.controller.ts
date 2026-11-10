@@ -63,7 +63,7 @@ const getEarningChartData = catchAsync(async (req, res) => {
     });
 });
 
-// Income: ingresos por categoría (donación / standard / premium) en el tiempo.
+// Income per category (donation / standard / premium) over time.
 // Query: year, currency ('USD'|'ARS'), granularity ('month'|'year').
 const getIncomeChartData = catchAsync(async (req, res) => {
     const result = await MetaService.getIncomeChartData(
@@ -79,7 +79,7 @@ const getIncomeChartData = catchAsync(async (req, res) => {
     });
 });
 
-// C.1 (Tanda 2): donantes distintos + monto total donado.
+// Distinct donors plus total donated amount.
 const getDonationStats = catchAsync(async (req, res) => {
     const result = await MetaService.getDonationStats();
     sendResponse(res, {
@@ -90,7 +90,7 @@ const getDonationStats = catchAsync(async (req, res) => {
     });
 });
 
-// C.2 (Tanda 2): conteo de usuarios por tipo de suscripcion.
+// User count by subscription type.
 const getSubscriptionStats = catchAsync(async (req, res) => {
     const result = await MetaService.getSubscriptionStats();
     sendResponse(res, {
@@ -101,7 +101,7 @@ const getSubscriptionStats = catchAsync(async (req, res) => {
     });
 });
 
-// C.4 (Tanda 2): agregacion de usuarios por ciudad/coordenada (mapa de calor).
+// Users aggregated by city/coordinate (heat map).
 const getUserGeoAggregation = catchAsync(async (req, res) => {
     const result = await MetaService.getUserGeoAggregation();
     sendResponse(res, {

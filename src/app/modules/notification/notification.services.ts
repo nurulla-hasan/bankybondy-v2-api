@@ -36,14 +36,11 @@ const getAllNotificationFromDB = async (
         const meta = await notificationQuery.countTotal();
         return { meta, result };
     } else {
-        // Excluir notificaciones cuyo actor (redirectId, string) sea un usuario
-        // bloqueado en cualquier direccion. Un `$nin` no descarta docs con
-        // redirectId null/ausente (notificaciones de sistema), asi que esas se
-        // siguen mostrando.
+        // Hide notifications whose actor (redirectId, a string) is blocked either way.
+        // `$nin` keeps docs with null/absent redirectId (system notifications).
         const blockedIds = await getBlockedIdsFor(String(user.profileId));
-        // Silenciado por categoría (opción a): lo muteado NO se muestra NI cuenta,
-        // así "todo lo que se ve descuenta el badge". Mismo criterio que el conteo
-        // (getUserNotificationCount) → lista y badge quedan alineados.
+        // Muted categories are neither shown nor counted, same rule as the count helper
+        // (getUserNotificationCount), so list and badge stay aligned.
         const me = await NormalUser.findById(user.profileId)
             .select('mutedNotificationCategories')
             .lean();
@@ -70,7 +67,7 @@ const getAllNotificationFromDB = async (
             .fields();
         const docs = await notificationQuery.modelQuery;
         const meId = String(user.profileId);
-        // Read state is per-user: expose a boolean `seen` and never the whole
+        // Read state is per-user: expose a `seen` boolean and never the whole
         // `seenBy` array (it would leak every reader's profile id).
         const result = (Array.isArray(docs) ? docs : []).map((doc: any) => {
             const item =
@@ -88,9 +85,8 @@ const getAllNotificationFromDB = async (
     }
 };
 
-// Conteo de no vistas (+ última) del usuario. Usa el MISMO helper que el socket
-// (getUserNotificationCount), así el número inicial y el que llega en vivo por el
-// evento 'notification' son siempre consistentes.
+// Unseen count (+ latest) for the user. Uses the SAME helper as the socket
+// (getUserNotificationCount) so the initial number and the live 'notification' event agree.
 const getUnseenCount = async (user: JwtPayload) => {
     return getUserNotificationCount(String(user?.profileId));
 };
@@ -98,9 +94,8 @@ const getUnseenCount = async (user: JwtPayload) => {
 const seeNotification = async (user: JwtPayload) => {
     let result;
     if (user?.role === USER_ROLE.superAdmin) {
-        // Marcar como vistas las notificaciones del admin agregando su profileId
-        // a `seenBy` (el schema NO tiene campo `seen`; antes se escribia a un
-        // campo fantasma y el "marcar como visto" del admin no registraba nada).
+        // Admin: mark seen by adding profileId to `seenBy` (the schema has no `seen`
+        // field; writing to it silently recorded nothing).
         result = await Notification.updateMany(
             { $or: [{ receiver: USER_ROLE.superAdmin }, { receiver: 'all' }] },
             { $addToSet: { seenBy: user?.profileId } },
@@ -124,9 +119,8 @@ const seeNotification = async (user: JwtPayload) => {
     return result;
 };
 
-// Marca UNA notificación como vista (agrega el profileId del usuario a su
-// `seenBy`). Se usa cuando el usuario ABRE una notificación puntual (no al abrir
-// la campana): así el badge baja de a una, sólo por las que realmente abre.
+// Marks ONE notification as seen (adds profileId to `seenBy`). Used when the user
+// OPENS a specific notification, so the badge drops only for the ones actually opened.
 const seeOneNotification = async (user: JwtPayload, id: string) => {
     const receiverKey =
         user?.role === USER_ROLE.superAdmin
@@ -139,7 +133,6 @@ const seeOneNotification = async (user: JwtPayload, id: string) => {
     );
 };
 
-// delete notificaiton
 const deleteNoficiation = async (id: string, profileId: string) => {
     const notification = await Notification.findOne({ _id: id, $or: [{ receiver: 'all' }, { receiver: profileId }] });
     if (!notification) {
@@ -156,8 +149,8 @@ const deleteNoficiation = async (id: string, profileId: string) => {
     }
 };
 
-// Preferencias de silenciado (Tanda C): traer las categorías silenciadas del
-// usuario + la lista de categorías válidas (para que el front dibuje los toggles).
+// Mute preferences: the user's muted categories plus the valid category list
+// (so the front can draw the toggles).
 const getPreferences = async (user: JwtPayload) => {
     const me = await NormalUser.findById(user?.profileId)
         .select('mutedNotificationCategories')
@@ -169,12 +162,11 @@ const getPreferences = async (user: JwtPayload) => {
     };
 };
 
-// Guardar el set completo de categorías silenciadas (el front manda el estado
-// final). Se saneia contra la lista válida: cualquier valor raro se descarta.
+// Saves the full muted-category set (the front sends the final state); sanitized
+// against the valid list, so any odd value is dropped.
 const updatePreferences = async (user: JwtPayload, mutedCategories: unknown) => {
-    // F3.4: rechazar body malformado en vez de VACIAR todos los mutes. Antes, un
-    // body NO-array (o sin `mutedCategories`) caía a `[]` en sanitizeCategories y
-    // borraba silenciosamente todas las categorías silenciadas del usuario.
+    // F3.4: reject a malformed body instead of WIPING all mutes. A non-array body used
+    // to fall back to [] in sanitizeCategories and silently erase every muted category.
     if (!Array.isArray(mutedCategories)) {
         throw new AppError(
             httpStatus.BAD_REQUEST,

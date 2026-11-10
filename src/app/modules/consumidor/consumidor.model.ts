@@ -1,16 +1,7 @@
 import { Schema, model } from 'mongoose';
 
-/* PEDIDOS DE "BOTÓN DE ARREPENTIMIENTO" Y "BOTÓN DE BAJA DE SERVICIO".
- *
- * Disposición SSDCyLC 954/2025 (derogó la Res. 424/2020 y la 316/2018): los dos
- * links tienen que funcionar SIN registración previa, y dentro de las 24 horas
- * hay que informar un código de identificación del pedido. Por eso esta colección
- * no cuelga de un usuario: la persona puede no tener sesión, o no tener cuenta.
- *
- * Es la PRUEBA ante un eventual sumario: cuándo se pidió (fecha del servidor) y
- * qué código se entregó. El pedido se guarda ANTES de mandar cualquier mail, y
- * no se borra: se marca `resuelta` a mano cuando se hizo la devolución o la baja.
- */
+/* "Regret button" and "cancel service" requests (SSDCyLC 954/2025): both must work
+ * without login, so this does not hang off a user. Kept as proof of when and what code was issued. */
 
 export const TIPOS_SOLICITUD = ['arrepentimiento', 'baja'] as const;
 export type TipoSolicitud = (typeof TIPOS_SOLICITUD)[number];
@@ -27,8 +18,8 @@ export interface ISolicitudConsumidor {
     comentario?: string;
     idioma: 'es' | 'en';
     estado: 'recibida' | 'resuelta';
-    // Si salió cada mail. El código ya se mostró en pantalla al crear el pedido,
-    // así que un mail caído no incumple el plazo: queda anotado para saberlo.
+    // Mail delivery flags: the code was already shown on screen at creation,
+    // so a failed mail does not breach the deadline; it's just recorded.
     mailConsumidor?: boolean;
     mailAdmin?: boolean;
     createdAt?: Date;

@@ -1,27 +1,24 @@
-/* Plantilla del resumen/notificaciones (digest) — estética Bankybondy v2 unificada.
- * Reusa la cáscara compartida de marca (logo semáforo + Poppins incrustada +
- * paleta índigo/cian/esmeralda) de mailTemplate/brandAssets. Mantiene la interfaz
- * DigestSection y el orden de secciones que arma digest.service.ts
- * (matches/trueques/reseñas/amistades). */
+/* Digest email template; reuses the shared brand shell from mailTemplate/brandAssets.
+ * Keeps the DigestSection interface and the section order built by digest.service.ts. */
 
 import { wrapEmail, BRAND_FONT, escHtml } from '../../mailTemplate/brandAssets';
 
 export interface DigestSection {
     label: string;
     color: string;
-    count: number | null; // número en la pastilla; null → solo un punto
+    count: number | null; // badge number; null → plain dot
     line: string;
 }
 
-// Tinte suave del círculo por color de categoría (sin alpha-hex: Outlook no lo soporta).
+// Soft circle tint per category color (no alpha-hex: Outlook unsupported).
 const TINT: Record<string, string> = {
-    '#4f46e5': '#eef2ff', // matches (índigo)
-    '#06b6d4': '#ecfeff', // trueques (cian)
-    '#f59e0b': '#fffbeb', // reseñas (ámbar)
-    '#10b981': '#ecfdf5', // amistades (esmeralda)
+    '#4f46e5': '#eef2ff', // matches (indigo)
+    '#06b6d4': '#ecfeff', // trades (cyan)
+    '#f59e0b': '#fffbeb', // reviews (amber)
+    '#10b981': '#ecfdf5', // friendships (emerald)
 };
 const tintFor = (c: string): string => TINT[(c || '').toLowerCase()] || '#f5f7ff';
-// Contraste de la pastilla: sobre índigo va blanco; sobre cian/ámbar/esmeralda, tinta.
+// Badge text: white on indigo, dark ink otherwise.
 const badgeTextFor = (c: string): string =>
     (c || '').toLowerCase() === '#4f46e5' ? '#ffffff' : '#0f172a';
 

@@ -5,21 +5,21 @@ import userBlockController from './userBlock.controller';
 
 const router = express.Router();
 
-// Bloquear a un usuario (por id de perfil NormalUser).
+// Block a user (by NormalUser profile id).
 router.post(
     '/block/:id',
     auth(USER_ROLE.user),
     userBlockController.blockUser
 );
 
-// Desbloquear a un usuario.
+// Unblock a user.
 router.delete(
     '/unblock/:id',
     auth(USER_ROLE.user),
     userBlockController.unblockUser
 );
 
-// Listar los usuarios que YO bloquee.
+// List the users I blocked.
 router.get(
     '/my-blocked-users',
     auth(USER_ROLE.user),

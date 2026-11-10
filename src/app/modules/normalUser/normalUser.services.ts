@@ -42,18 +42,12 @@ import { INormalUser } from './normalUser.interface';
 import NormalUser from './normalUser.model';
 import { User } from '../user/user.model';
 
-// Escapa los metacaracteres de expresion regular para evitar inyeccion/errores
-// al construir el RegExp a partir del termino de busqueda del usuario.
+// Escape regex metacharacters from user-supplied search terms.
 const escapeRegex = (input: string): string =>
     input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-// Busqueda ACCESIBLE (insensible a acentos y mayusculas), SIN IA ni aproximacion:
-// es normalizacion pura y deterministica. Se le quitan las tildes AL TERMINO y se
-// reemplaza cada vocal/consonante base por una clase que matchea todas sus
-// variantes acentuadas, de modo que la consulta encuentre el texto guardado tenga
-// o no tenga tildes (en cualquier direccion). La bandera 'i' cubre mayusculas.
-// Sigue siendo subcadena (substring), asi "guitar" encuentra "guitarra".
-// Ej: "filosofia" y "filosofía" -> ambas encuentran "Filosofía", "FILOSOFIA", etc.
+// Accent/case-insensitive substring search: pure normalization, no AI.
+// e.g. "filosofia" also matches "Filosofía" and "FILOSOFIA".
 const DIACRITIC_CLASSES: Record<string, string> = {
     a: '[aàáâãäå]',
     e: '[eèéêë]',
@@ -63,14 +57,10 @@ const DIACRITIC_CLASSES: Record<string, string> = {
     n: '[nñ]',
     c: '[cç]',
 };
-// Exportada: el buscador de vínculos dentro del perfil (bondRequest.service) usa
-// EXACTO el mismo criterio insensible a acentos/mayúsculas, sin duplicar la lógica.
+// Exported: bondRequest.service reuses the same matching criteria.
 export const buildLooseRegex = (term: string): RegExp => {
-    // 1) Quitar tildes del propio termino (NFD + borrar marcas combinantes).
     const stripped = term.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    // 2) Escapar metacaracteres (las letras NO se escapan, quedan intactas).
     const escaped = escapeRegex(stripped);
-    // 3) Expandir cada letra base a su clase de variantes acentuadas.
     const pattern = escaped.replace(
         /[aeiounc]/gi,
         (ch) => DIACRITIC_CLASSES[ch.toLowerCase()] ?? ch
@@ -78,9 +68,8 @@ export const buildLooseRegex = (term: string): RegExp => {
     return new RegExp(pattern, 'i');
 };
 
-// Distancia en km entre dos puntos GeoJSON [lng, lat] (haversine). Local y
-// autocontenida (el helper del matcheo no esta exportado). Se usa solo para
-// exponer `distanceKm` en el modo "near"; nunca se exponen las coordenadas.
+// Great-circle distance (km) between GeoJSON [lng, lat] points. Local copy: the
+// matching helper is not exported. Only feeds `distanceKm` in "near" mode.
 const haversineKm = (a?: number[], b?: number[]): number | undefined => {
     if (!a || !b || a.length < 2 || b.length < 2) return undefined;
     const R = 6371;
@@ -95,9 +84,8 @@ const haversineKm = (a?: number[], b?: number[]): number | undefined => {
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 };
 
-// Solo estos campos puede editar el usuario en su propio perfil.
-// NUNCA: subscriptionType, bondLimit, reputation, user, email, role, etc.
-// (esto evita el mass-assignment: pedir Premium/bondLimit/reputacion gratis).
+// Whitelist for self-editing; prevents mass-assignment of subscriptionType,
+// bondLimit, reputation, user, email, role, etc.
 const PROFILE_EDITABLE_FIELDS: (keyof INormalUser)[] = [
     'name',
     'phone',
@@ -111,39 +99,30 @@ const PROFILE_EDITABLE_FIELDS: (keyof INormalUser)[] = [
     'socialLinks',
 ];
 
-// PII / campos internos que NO deben viajar cuando un usuario mira el perfil de
-// OTRO (Personas / single-user ajeno). Antes solo se borraba `location`, así que
-// cualquier usuario autenticado recibía email/teléfono/fecha-de-nac./suscripción/
-// límite de bonos + flags internos de otros. El dueño (viendo lo suyo) y el admin
-// siguen recibiendo todo. `address` se MANTIENE: es la ciudad que el front muestra
-// en las tarjetas de Personas y el perfil público.
+// PII/internal fields hidden when a user views someone else's profile.
+// `address` is kept: it is the city shown on Personas/public cards.
 const PRIVATE_USER_FIELDS = [
-    // Interno: clave de orden de Destacados (vinculosVivos.ts). Además revelaría
-    // si alguien que ocultó sus vínculos (`bondsPublic: false`) tiene alguno.
+    // Internal featured ordering key; also leaks whether a hidden user has bonds.
     'hasActiveBonds',
     'email',
     'phone',
     'dateOfBirth',
     'subscriptionType',
     'bondLimit',
-    // La URL de PayPal/MP lleva embebido el id del usuario (custom_id /
-    // external_reference): no puede viajar en el perfil de otro ni en Personas.
+    // Checkout URL embeds the user id (custom_id / external_reference).
     'pendingSubscriptionCheckout',
     'bondSeq',
     'digestOptOut',
     'mutedNotificationCategories',
     'locationUpdatedAt',
     'locationMode',
-    // El rastro de la palanca manual es interno: quién movió el plan de alguien,
-    // cuándo y por qué no es asunto de los demás usuarios (y el motivo puede
-    // mencionar un contracargo o una disputa).
+    // Admin audit trail: internal, and the reason may mention disputes.
     'subscriptionSetBy',
     'subscriptionSetAt',
     'subscriptionSetReason',
     'subscriptionHistory',
 ];
-// Orden de Destacados: campo por campo el del índice `personas_destacados`
-// (normalUser.model.ts). Si se cambia acá, se cambia allá.
+// Must match the `personas_destacados` index (normalUser.model.ts).
 const ORDEN_DESTACADOS: Record<string, 1 | -1> = {
     hasActiveBonds: -1,
     'reputation.score': -1,
@@ -170,7 +149,7 @@ const updateUserProfile = async (id: string, payload: Partial<INormalUser>) => {
         throw new AppError(httpStatus.NOT_FOUND, 'Profile not found');
     }
 
-    // Whitelist: descartar cualquier campo no permitido del payload.
+    // Whitelist: drop any non-editable payload field.
     const safeUpdate: Partial<INormalUser> = {};
     for (const key of PROFILE_EDITABLE_FIELDS) {
         if (payload[key] !== undefined) {
@@ -178,11 +157,8 @@ const updateUserProfile = async (id: string, payload: Partial<INormalUser>) => {
         }
     }
 
-    // Bio: texto libre visible en el perfil. Se censura ANTES de guardar, con la
-    // capa COMPLETA (lista dura + moderación gratis + intención gpt-4o-mini, que
-    // agarra frases contextuales tipo "drug dealer" que la lista no tiene). Bajo
-    // volumen → el costo de la capa paga es casi nulo. Falla CERRADO (retryable)
-    // si la moderación no responde: el guardado se rechaza y se reintenta.
+    // Bio is moderated before saving with the full layer (hard list + free
+    // moderation + gpt-4o-mini intent). Fails closed (retryable) on errors.
     if (typeof safeUpdate.bio === 'string' && safeUpdate.bio.trim()) {
         const bioCheck = await isTextSafe(safeUpdate.bio);
         assertTextAllowed(bioCheck, 'Bio');
@@ -215,7 +191,7 @@ const getAllUser = async (
 
         const rawResult = await userQuery.modelQuery;
         const meta = await userQuery.countTotal();
-        // Privacidad: nunca exponer las coordenadas crudas del usuario.
+        // Privacy: never expose raw coordinates.
         const result = (rawResult as any[]).map((doc) => {
             const obj =
                 typeof doc?.toObject === 'function' ? doc.toObject() : doc;
@@ -235,19 +211,14 @@ const getAllUser = async (
                 ? query.searchTerm.trim()
                 : '';
 
-        // Busqueda (aditiva): ademas de nombre/email, el termino tambien matchea
-        // la bio, el nombre de una skill del usuario y lo que ofrece/busca
-        // (offer/want/description de sus bonos vivos). Con termino vacio, el
-        // stage queda {} exactamente igual que antes (listado por defecto intacto).
+        // Additive search: name, bio, skill names, and live bond offer/want/
+        // description. Empty term leaves the stage {} (default listing intact).
         let searchMatchStage: any = {};
         if (searchTerm) {
-            // Regex insensible a acentos Y mayusculas (normalizacion, sin IA).
             const rx = buildLooseRegex(searchTerm);
 
-            // Dos pre-queries baratas en paralelo (indexadas, sin lookups por doc):
-            //  - ids de skills cuyo nombre matchea.
-            //  - ids de usuarios dueños de un bono vivo (WAITING_FOR_LINK/ONGOING,
-            //    no en pausa, no enlazado) cuyo offer/want/description matchea.
+            // Two cheap indexed pre-queries in parallel: matching skill ids and
+            // owners of live bonds whose content matches.
             const [skillDocs, matchedBondOwnerIds] = await Promise.all([
                 Skill.find({ name: rx }).select('_id').lean(),
                 BondRequest.find({
@@ -264,12 +235,8 @@ const getAllUser = async (
             ]);
             const matchedSkillIds = skillDocs.map((s) => s._id);
 
-            // Descubrimiento por CONTENIDO de vínculo respeta la privacidad: si el
-            // dueño ocultó sus vínculos (`bondsPublic === false`), NO se lo debe
-            // encontrar buscando "parrilla" en Personas por lo que ofrece/busca.
-            // (Sí sigue matcheando en las cadenas de intercambio: eso es otro
-            // circuito que ignora `bondsPublic`.) Se descartan acá los dueños con
-            // vínculos ocultos antes de sumarlos a la búsqueda.
+            // Content discovery respects privacy: owners with hidden bonds
+            // (`bondsPublic === false`) are not searchable in Personas.
             let visibleBondOwnerIds: any[] = [];
             if (matchedBondOwnerIds.length) {
                 visibleBondOwnerIds = await NormalUser.find({
@@ -278,12 +245,8 @@ const getAllUser = async (
                 }).distinct('_id');
             }
 
-            // El EMAIL se sacó de la búsqueda: el email es privado (se recorta de
-            // la respuesta con stripPrivateUserFields), pero si además se podía
-            // BUSCAR por email, cualquier logueado escribía `victima@correo.com`
-            // y, por aparecer o no un perfil, confirmaba que esa cuenta existe y
-            // la asociaba a un nombre y una foto (enumeración + mapeo email→
-            // identidad). Se busca por nombre, bio, skills y lo que ofrece/busca.
+            // Email is not searchable: it allowed account enumeration
+            // (email → identity through name/photo presence).
             const orBranches: any[] = [{ name: rx }, { bio: rx }];
             if (matchedSkillIds.length) {
                 orBranches.push({ skills: { $in: matchedSkillIds } });
@@ -294,49 +257,14 @@ const getAllUser = async (
             searchMatchStage = { $or: orBranches };
         }
 
-        // Bloqueo (B.4): no mostrar a quienes bloquee ni a quienes me bloquearon.
+        // B.4: hide users I blocked and users who blocked me.
         const blockedIds = await getBlockedObjectIdsFor(userData.profileId);
 
-        // online=true (aditivo): limitar el listado a usuarios actualmente
-        // conectados. Se obtienen los profileId online y se convierten a
-        // ObjectId (descartando ids invalidos). Si nadie esta online, el
-        // $in: [] resultante devuelve vacio correctamente. Cuando el param no
-        // viene, onlineObjectIds queda null y el $match no cambia.
-        //
-        // ⚠️ ESCALA — ESTO ERA UN TECHO DURO (T4 del plan), por partida doble:
-        //   1. `SMEMBERS` del Set entero: comando O(N) contra un Redis de un solo
-        //      hilo, el mismo que atiende BullMQ, los rate limits y el adapter de
-        //      sockets. Con decenas de miles de conectados bloquea a todos.
-        //   2. Y el resultado iba a un `$in` de Mongo con ESA MISMA cantidad de
-        //      ObjectIds. Un `$in` de 50.000 elementos no es una consulta: es una
-        //      forma cara de hacer un COLLSCAN.
-        //
-        // Ahora se pide una MUESTRA acotada (`SRANDMEMBER key <tope>`), que no
-        // recorre el Set. Es un cambio de semántica y hay que decirlo con todas
-        // las letras: por encima del tope, "Personas online" deja de ser "todos
-        // los conectados" y pasa a ser "hasta N conectados, tomados al azar".
-        //
-        // Se eligió a conciencia sobre las alternativas: paginar el Set con SSCAN
-        // no compone con los otros filtros (bloqueados, cercanía) ni con el orden;
-        // y mover la presencia a Mongo para poder filtrar ahí sería escribir en la
-        // base en cada conexión y desconexión.
-        //
-        // ⚠️ LO QUE LA MUESTRA CUESTA, DICHO SIN ADORNOS (panel del 11/9): por
-        // encima del tope, "Personas online" deja de ser paginable de forma
-        // coherente. `SRANDMEMBER` devuelve una muestra DISTINTA en cada request,
-        // así que la página 2 se calcula sobre otro conjunto que la página 1 → se
-        // repiten perfiles, se pierden otros, y el total baila entre requests. Es
-        // una vidriera, no un listado. Por debajo del tope (que es donde está el
-        // producto hoy, y por bastante) la respuesta es EXACTA: `SRANDMEMBER` con
-        // count ≥ cardinalidad devuelve el Set entero.
-        //
-        // El caso `near + online` NO usa esto: ahí hay una lista de candidatos y se
-        // pregunta exacto con `filtrarOnline`. Ver más abajo.
-        //
-        // `||` y no `??`: la convención del repo (17 de 19 usos) y por un motivo
-        // concreto — `PEOPLE_ONLINE_SAMPLE_MAX=` vacío en un `.env`, que es la
-        // forma más común de dejar una variable anotada, da `Number('') === 0` y
-        // con `??` el filtro devolvería UN usuario, en silencio.
+        // online=true: sample up to PEOPLE_ONLINE_SAMPLE_MAX connected users via
+        // SRANDMEMBER. A full SMEMBERS plus an equally huge $in was a hard scale
+        // wall. Above the cap the listing is approximate and not page-coherent
+        // (near+online stays exact, below). `||` not `??`: an empty env var gives
+        // 0 and `??` would silently return exactly one user.
         const TOPE_ONLINE = Math.max(
             Number(process.env.PEOPLE_ONLINE_SAMPLE_MAX) || 2000,
             1
@@ -351,11 +279,8 @@ const getAllUser = async (
 
         const callerObjectId = new mongoose.Types.ObjectId(userData.profileId);
 
-        // near=true (aditivo): limita y ORDENA el listado por cercania geografica
-        // al que consulta. Requiere ubicacion guardada del consultante; si no la
-        // tiene, se devuelve vacio con needsLocation:true para que el front pida
-        // permiso de ubicacion. Los ids vienen del $near (mas cercanos primero) y
-        // se calcula distanceKm por usuario (haversine). NUNCA se exponen coords.
+        // near=true: restrict and order by distance to the caller. Without a
+        // stored location returns needsLocation:true. Coordinates never exposed.
         const isNear = query?.near === 'true';
         let nearIds: mongoose.Types.ObjectId[] | null = null;
         let distanceByUser: Map<string, number> | null = null;
@@ -379,8 +304,8 @@ const getAllUser = async (
                     $ne: callerObjectId,
                     ...(blockedIds.length ? { $nin: blockedIds } : {}),
                 },
-                // Privacidad: ocultar del listado a quien se oculto de Personas
-                // (listedInPeople === false). Los legados / true siguen visibles.
+                // Privacy: hide users who opted out of Personas; $ne:false keeps
+                // legacy docs and true visible.
                 listedInPeople: { $ne: false },
                 location: {
                     $near: {
@@ -395,7 +320,6 @@ const getAllUser = async (
                 .limit(300)
                 .lean();
 
-            // Orden por cercania (nearest-first) preservado.
             nearIds = (nearDocs as any[]).map(
                 (d) => d._id as mongoose.Types.ObjectId
             );
@@ -411,19 +335,12 @@ const getAllUser = async (
             }
         }
 
-        // Combinar las restricciones de _id ($in) de near y online. Si ambos
-        // estan activos, se intersecta preservando el orden por cercania.
+        // Combine the near/online _id filters; near order is preserved.
         let idInList: mongoose.Types.ObjectId[] | null = null;
         if (nearIds && query?.online === 'true') {
-            // CERCANÍA + ONLINE: acá NO se muestrea, se pregunta EXACTO.
-            //
-            // Ya tenemos en memoria la lista acotada de vecinos, así que
-            // `SMISMEMBER` contesta "¿cuáles de estos están online?" en O(vecinos)
-            // y con la verdad completa. Intersectar contra una MUESTRA sería
-            // desastroso justo acá: con 50.000 conectados y tope 2.000, la muestra
-            // cubre el 4% → el usuario vería ~12 de sus 300 vecinos conectados, y
-            // una docena DISTINTA en cada refresco. Eso no es una aproximación, es
-            // ruido. (Panel del 11/9.)
+            // Near+online: exact `filtrarOnline` over the in-memory neighbour
+            // list. Intersecting a sample here would return a dozen random
+            // neighbours, different on every refresh — noise, not approximation.
             const onlineSet = await filtrarOnline(
                 nearIds.map((id) => id.toString())
             );
@@ -434,28 +351,20 @@ const getAllUser = async (
             idInList = onlineObjectIds;
         }
 
-        // sort=featured / sort=reputation (aditivo): ordena TODO el conjunto
-        // filtrado antes de paginar. Se coloca antes del $facet, por lo que el
-        // $skip/$limit opera sobre el orden global y no por pagina. Sin param
-        // de sort, no se añade ningun $sort (se conserva el orden por defecto
-        // actual, byte-for-byte).
+        // Global $sort before $facet, so $skip/$limit apply to the whole
+        // ordering. No sort param → no $sort stage (default order unchanged).
         let sortStages: mongoose.PipelineStage[] = [];
         if (query?.sort === 'reputation') {
-            // Los valores faltantes de reputation.score quedan al final por el
-            // desempate con _id.
+            // Missing scores sort last via the _id tiebreak.
             sortStages = [{ $sort: { 'reputation.score': -1, _id: 1 } }];
         } else if (query?.sort === 'featured') {
-            // Destacados: prioridad (1) tener algun bono vivo (algo para
-            // intercambiar), (2) reputacion, (3) actividad reciente. (1) es
-            // `hasActiveBonds`, GUARDADO en el usuario (vinculosVivos.ts). Antes
-            // se calculaba acá en cada carga: un `distinct` sobre los vínculos
-            // (docs de 40 KB) y un `$in` de todos los dueños contra todos los
-            // usuarios. Cuadrático: el primer muro de escala medido (29/9).
+            // Featured: has a live bond, then reputation, then recent activity.
+            // `hasActiveBonds` is precomputed (vinculosVivos.ts); computing it
+            // per load was the first measured scale wall.
             sortStages = [{ $sort: ORDEN_DESTACADOS }];
         }
 
-        // near tiene PRECEDENCIA sobre sort=reputation/featured: cuando near=true
-        // el orden global es por cercania (rank del arreglo nearIds, ya ordenado).
+        // near takes precedence over sort=reputation/featured.
         if (isNear && idInList) {
             sortStages = [
                 {
@@ -468,12 +377,8 @@ const getAllUser = async (
             ];
         }
 
-        // Enriquecimiento de cada tarjeta (estado de amistad con quien mira y
-        // nombres de las skills). Corre SOLO sobre la página, dentro del `$facet`
-        // y después del `$limit`: ninguna etapa filtra ni cambia el orden, así
-        // que el resultado es el mismo, pero antes corría para TODOS los usuarios
-        // antes de paginar (un `$lookup` con `$expr` por persona). Medido el 29/9:
-        // con 3.000 usuarios, 2 s por carga contra ~0,3 s.
+        // Per-card enrichment (friend status, skill names) runs only on the page,
+        // after $limit — it used to run for every user (2s vs 0.3s at 3k users).
         const enrichStages: mongoose.PipelineStage.FacetPipelineStage[] = [
             {
                 $lookup: {
@@ -577,7 +482,6 @@ const getAllUser = async (
                                             },
                                         },
                                     },
-                                    // then: 'following_pending',
                                     then: 'following',
                                 },
                                 {
@@ -607,7 +511,6 @@ const getAllUser = async (
                                             },
                                         },
                                     },
-                                    // then: 'follower_pending',
                                     then: 'follower',
                                 },
                                 {
@@ -637,7 +540,6 @@ const getAllUser = async (
                                             },
                                         },
                                     },
-                                    // then: 'following_rejected',
                                     then: 'following',
                                 },
                                 {
@@ -667,7 +569,6 @@ const getAllUser = async (
                                             },
                                         },
                                     },
-                                    // then: 'follower_rejected',
                                     then: 'follower',
                                 },
                             ],
@@ -677,10 +578,9 @@ const getAllUser = async (
                 },
             },
             {
-                $project: { friendRequests: 0 }, // remove friendRequests array
+                $project: { friendRequests: 0 },
             },
-            // Resolver skills (ObjectId -> { _id, name }) para las tarjetas de
-            // Personas/perfil. No se elimina ningún campo existente.
+            // Resolve skill ids to { _id, name }; no field is dropped.
             {
                 $lookup: {
                     from: 'skills',
@@ -705,20 +605,11 @@ const getAllUser = async (
             },
         ];
 
-        // DESTACADOS SIN FILTROS (la pantalla por defecto de Personas): camino por
-        // índice. `$match` → `$sort` sobre `personas_destacados` → `$skip`/`$limit`
-        // → enriquecimiento de la página, y el total con un `countDocuments`
-        // aparte. Sin ordenar a todos en memoria: la página p lee ~15·p usuarios
-        // (entrada del índice y documento: el `$skip` también se camina) y el
-        // total es un conteo lineal (~40-70 ms con 30.000 usuarios). Medido el
-        // 29/9: 30.000 usuarios, p95 < 0,8 s con 20 cargas a la vez en 2 vCPU.
-        // Mismo resultado que el camino general, verificado.
-        //
-        // Los baneados por admin se excluyen igual que en el camino general, por
-        // `NormalUser.user` → `User._id`, pero con un `$nin` y no con el `$lookup`
-        // por persona: un `$lookup` antes del `$sort` le impide a Mongo ordenar
-        // por el índice. NO por `User.profileId`: puede no apuntar a su perfil
-        // (null en un alta social a medio hacer, u otro perfil).
+        // Default Personas screen (featured, no filters): index-driven path —
+        // $match → $sort on `personas_destacados` → $skip/$limit → page
+        // enrichment, plus a separate countDocuments (~0.8s p95 at 30k users).
+        // Admin bans are excluded with $nin on `user` (not `profileId`, which can
+        // be null); a $lookup before $sort would prevent index usage.
         const destacadosPorIndice = async () => {
             const baneados = await User.distinct('_id', { isBlocked: true });
             const filtro = {
@@ -739,8 +630,7 @@ const getAllUser = async (
                     ...enrichStages,
                 ]),
             ]);
-            // Misma forma que el `$facet` del camino general: sin resultados,
-            // `meta` queda vacío y cae en el default de más abajo.
+            // Same shape as the general path's $facet (falls back to default meta).
             return [
                 {
                     meta: total
@@ -767,9 +657,8 @@ const getAllUser = async (
             {
                 $match: {
                     ...searchMatchStage,
-                    // Privacidad: excluir del listado (y su busqueda) a quien se
-                    // oculto de Personas. NO afecta el matcheo ni el link directo.
-                    // { $ne: false } deja visibles los legados (campo ausente) y true.
+                    // Privacy: hide users who opted out of Personas; $ne:false
+                    // keeps legacy docs and true visible. Does not affect matching.
                     listedInPeople: { $ne: false },
                     _id: {
                         $ne: callerObjectId,
@@ -778,9 +667,8 @@ const getAllUser = async (
                     },
                 },
             },
-            // C.5 (Tanda 2): excluir del listado a usuarios bloqueados por un
-            // admin (User.isBlocked = true). Se resuelve el User via
-            // NormalUser.user y se descartan los bloqueados.
+            // C.5: exclude admin-banned users (User.isBlocked), resolved via
+            // NormalUser.user.
             {
                 $lookup: {
                     from: 'users',
@@ -795,9 +683,6 @@ const getAllUser = async (
                 },
             },
             { $project: { accountStatus: 0 } },
-            // sort=featured / sort=reputation (aditivo): $sort global antes del
-            // $facet (definido arriba en sortStages). Vacio cuando el param no
-            // viene (orden por defecto intacto).
             ...sortStages,
             {
                 $facet: {
@@ -830,15 +715,14 @@ const getAllUser = async (
 
         const data = (aggResult[0]?.data || []) as any[];
         for (const u of data) {
-            // near mode: exponer SOLO la distancia (numero), nunca las coords.
+            // near mode: expose distance only, never coordinates.
             if (distanceByUser) {
                 const km = distanceByUser.get(u._id?.toString());
                 if (typeof km === 'number') u.distanceKm = km;
             }
-            // Privacidad: nunca exponer las coordenadas crudas del usuario.
+            // Privacy: never expose raw coordinates.
             delete u.location;
-            // PII: esta rama es SOLO para usuarios comunes (el admin tiene su
-            // rama con el doc completo). Se recorta email/teléfono/PII interna.
+            // PII: this branch is for regular users only (admins get the full doc).
             stripPrivateUserFields(u);
         }
 
@@ -854,12 +738,9 @@ const getAllUser = async (
     }
 };
 
-// get single user
 const getSingleUser = async (viewer: JwtPayload, id: string) => {
     const user = await getSingleUserWithStatus(viewer.profileId, id);
-    // PII: si el que mira NO es el dueño del perfil NI un admin, se recorta la
-    // PII/campos internos (mismo criterio que el listado de Personas). El dueño
-    // viendo lo suyo (edición de perfil) y el admin reciben todo.
+    // Strip PII unless the viewer is the owner or an admin.
     const isSelf = String(viewer.profileId) === String(id);
     const isAdmin =
         viewer.role === USER_ROLE.admin ||
@@ -868,12 +749,8 @@ const getSingleUser = async (viewer: JwtPayload, id: string) => {
     if (!isSelf && !isAdmin) {
         stripPrivateUserFields(result);
     }
-    // LAS NOTAS DE OPERADOR NO VAN NI AL PROPIO DUEÑO. El resto de la PII sí (es
-    // su email, su teléfono, su plan), pero `subscriptionSetReason` es una nota
-    // ENTRE OPERADORES: el placeholder de la UI del dashboard sugiere escribir
-    // cosas como "contracargo del pago X". Que eso le llegue al usuario en el
-    // JSON de su propio perfil no es transparencia, es filtrar una anotación
-    // interna sobre una disputa. El historial completo, por la misma razón.
+    // Operator notes are internal: not even the owner receives them (the reason
+    // may describe a chargeback or dispute). Same for the full history.
     if (!isAdmin) {
         delete (result as any).subscriptionSetReason;
         delete (result as any).subscriptionSetBy;
@@ -896,9 +773,7 @@ export async function getSingleUserWithStatus(
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid user id');
     }
 
-    // Si existe un usuario que visualiza (viewer) y el objetivo esta en una
-    // relacion de bloqueo con el (en cualquier direccion), tratamos el perfil
-    // como inexistente para no revelar su existencia.
+    // Treat profiles with a block in either direction as nonexistent (404).
     if (currentProfileId) {
         const blockedIds = await getBlockedIdsFor(currentProfileId);
         if (blockedIds.includes(targetUserId)) {
@@ -909,37 +784,22 @@ export async function getSingleUserWithStatus(
     const currentId = new mongoose.Types.ObjectId(currentProfileId);
     const targetId = new mongoose.Types.ObjectId(targetUserId);
 
-    // Bloqueo ADMINISTRATIVO (User.isBlocked): el listado de Personas ya lo
-    // excluye con un lookup a `users` (ver C.5, más arriba en este archivo), pero
-    // acá se hacía sólo `$match` por _id. Resultado: un perfil bloqueado por un
-    // admin desaparecía del listado pero seguía visible entrando por URL directa
-    // a /normal-user/single-user/:id — la moderación quedaba a medias.
-    // Se responde 404 igual que con el bloqueo entre usuarios, para no revelar
-    // que la cuenta existe.
+    // Admin suspension (User.isBlocked) must 404 here too: banned profiles used
+    // to vanish from listings but stayed reachable via direct URL.
     const targetAccount = await NormalUser.findById(targetId)
         .select('user listedInPeople')
         .populate({ path: 'user', select: 'isBlocked' })
         .lean();
 
-    // Bloqueo ADMINISTRATIVO PRIMERO: una cuenta suspendida por un admin responde
-    // 404 (indistinguible de "no existe"), ANTES de evaluar si está oculta. Si se
-    // mirara el ocultamiento primero, una cuenta suspendida Y oculta devolvería un
-    // 403 PROFILE_HIDDEN y así revelaría su existencia (que es una cuenta oculta).
-    // El 404 tiene que ganar para no filtrar información de cuentas moderadas.
+    // Admin ban first: 404 must win over PROFILE_HIDDEN so a suspended and
+    // hidden account does not reveal its existence.
     if ((targetAccount as any)?.user?.isBlocked === true) {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
-    // Perfil OCULTO (listedInPeople === false): modelo tipo "cuenta privada".
-    //  - El DUEÑO siempre ve el suyo.
-    //  - Un AMIGO (solicitud aceptada en cualquier sentido) también lo ve: ocultar
-    //    es ocultarse de los desconocidos, no de la gente que ya aceptaste.
-    //  - Cualquier OTRO recibe un 403 con code 'PROFILE_HIDDEN', para que el front
-    //    muestre un cartel amable "este perfil está oculto" en vez del error
-    //    genérico. Es distinto del 404 de "no existe / bloqueado", que se mantiene
-    //    indistinguible a propósito (no revelar cuentas / respetar moderación).
-    // El matcheo y la subida de audio ignoran este flag: la persona sigue
-    // matcheando y participando de las cadenas igual.
+    // Hidden profile (listedInPeople === false): owner and accepted friends can
+    // view; anyone else gets 403 PROFILE_HIDDEN. Matching and audio uploads
+    // ignore this flag.
     const isSelf =
         !!currentProfileId &&
         currentProfileId.toString() === targetUserId.toString();
@@ -961,10 +821,9 @@ export async function getSingleUserWithStatus(
     }
 
     const pipeline: any = [
-        // Match the target user (do NOT exclude self here; if you want to, add {_id: {$ne: currentId}})
         { $match: { _id: targetId } },
 
-        // Find friend requests between current user and target user (both directions)
+        // Friend requests in both directions.
         {
             $lookup: {
                 from: 'friendrequests',
@@ -1002,20 +861,19 @@ export async function getSingleUserWithStatus(
                             },
                         },
                     },
-                    // (Optional) project only needed fields to reduce memory
                     { $project: { status: 1, sender: 1, receiver: 1, _id: 0 } },
                 ],
                 as: 'friendRequests',
             },
         },
 
-        // Derive friendRequestStatus (same ordering/precedence you used)
+        // friendRequestStatus precedence: friend > following > follower > none.
         {
             $addFields: {
                 friendRequestStatus: {
                     $switch: {
                         branches: [
-                            // If there's any Accepted request in either direction => "friend"
+                            // Accepted in either direction => "friend"
                             {
                                 case: {
                                     $anyElementTrue: {
@@ -1034,7 +892,7 @@ export async function getSingleUserWithStatus(
                                 then: 'friend',
                             },
 
-                            // If current -> other with Pending => "following"
+                            // current -> other, Pending => "following"
                             {
                                 case: {
                                     $anyElementTrue: {
@@ -1063,7 +921,7 @@ export async function getSingleUserWithStatus(
                                 then: 'following',
                             },
 
-                            // If other -> current with Pending => "follower"
+                            // other -> current, Pending => "follower"
                             {
                                 case: {
                                     $anyElementTrue: {
@@ -1092,16 +950,10 @@ export async function getSingleUserWithStatus(
                                 then: 'follower',
                             },
 
-                            // Si YO mandé la solicitud y me la RECHAZARON, la
-                            // relación es inexistente, no 'following'. Mapearla a
-                            // 'following' dejaba el botón en "Siguiendo", que no
-                            // tiene acción: la persona no podía volver a enviar
-                            // nunca, aunque el modelo lo permite a propósito (el
-                            // índice único es PARCIAL sobre status:Pending, y su
-                            // comentario dice explícitamente que un mismo par
-                            // puede volver a solicitarse en el futuro).
-                            // Con 'none' el botón vuelve a ofrecer enviar.
-                            // (Si te hartan, para eso está bloquear.)
+                            // My outgoing request was rejected => 'none', not
+                            // 'following': otherwise the button dead-ends and the
+                            // user can never re-send (allowed by design — the unique
+                            // index is partial on Pending).
                             {
                                 case: {
                                     $anyElementTrue: {
@@ -1130,7 +982,7 @@ export async function getSingleUserWithStatus(
                                 then: 'none',
                             },
 
-                            // If other -> current with Rejected => "follower" (your current logic)
+                            // Incoming rejected request => "follower"
                             {
                                 case: {
                                     $anyElementTrue: {
@@ -1165,11 +1017,10 @@ export async function getSingleUserWithStatus(
             },
         },
 
-        // Don't leak the raw requests array
+        // Don't leak the raw requests array.
         { $project: { friendRequests: 0 } },
 
-        // Resolver skills (ObjectId -> { _id, name }) para el perfil. No se
-        // elimina ningún campo existente.
+        // Resolve skill ids to { _id, name }; no field is dropped.
         {
             $lookup: {
                 from: 'skills',
@@ -1200,18 +1051,13 @@ export async function getSingleUserWithStatus(
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
-    // Privacidad: nunca exponer las coordenadas crudas del usuario.
+    // Privacy: never expose raw coordinates.
     delete (doc as any).location;
 
-    // Reputacion DERIVADA EN VIVO de las valoraciones reales del usuario, para
-    // que la cabecera del perfil siempre coincida con las reseñas visibles
-    // aunque el cache `reputation` de NormalUser este obsoleto. Agregacion de un
-    // solo usuario (barata). Se sobreescriben avg/count sobre el objeto devuelto
-    // y se recalcula el score con la misma funcion bayesiana.
-    // `applied:true`: cuenta SOLO las reseñas ya aplicadas (trueque cerrado),
-    // igual que reputation.util y getPublicRatings. Sin este filtro la cabecera
-    // sumaría reseñas en suspenso y mostraría un número distinto al de la lista
-    // de reseñas y al del matcheo (tres cuentas incoherentes en la misma vista).
+    // Reputation is recomputed live so the header always matches the visible
+    // reviews even if the cached value is stale. `applied:true` counts only
+    // settled reviews (same as reputation.util), else header, list and matching
+    // would show three different numbers.
     const repAgg = await BondRating.aggregate([
         { $match: { rated: targetId, applied: true } },
         {
@@ -1234,9 +1080,8 @@ export async function getSingleUserWithStatus(
     return doc;
 }
 
-// Actualiza la geolocalizacion del usuario que consulta. Guarda un GeoJSON
-// Point [lng, lat], la marca de tiempo y el modo (auto/manual). Devuelve la
-// vista compacta que necesita el front (nunca las coordenadas crudas anidadas).
+// Store a GeoJSON Point [lng, lat] plus timestamp and mode (auto/manual).
+// Returns the compact view the front needs — never raw coordinates.
 const updateLocation = async (
     profileId: string,
     payload: { lat: number; lng: number; mode?: 'auto' | 'manual' }
@@ -1263,30 +1108,10 @@ const updateLocation = async (
     return { lat, lng, locationUpdatedAt, locationMode };
 };
 
-/* PRECIOS DE LOS PLANES — lo que la página de suscripciones tiene que MOSTRAR.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * POR QUÉ EXISTE: EL PRECIO QUE SE MOSTRABA NO ERA EL QUE SE COBRABA.
- *
- * La página calculaba el precio en pesos ELLA MISMA, en el navegador:
- *     MP_USD hardcodeado en el front (8 / 15)  ×  cotización EN VIVO de dolarapi
- * mientras el servidor cobraba con OTRA cuenta:
- *     MP_USD_STANDARD/PREMIUM del .env  ×  su propia cotización CACHEADA 1 HORA
- *
- * Dos cuentas distintas con dos fuentes distintas: el número que veía la persona
- * y el que se le cobraba casi nunca coincidían —diferían en lo que se hubiera
- * movido el blue en esa hora— y si alguna vez se cambiaba el `.env`, el front
- * seguía mostrando 8 y 15 para siempre. Encima, si dolarapi le fallaba al
- * navegador, el botón no mostraba precio ninguno.
- *
- * Para un producto cuyo moat declarado es la honestidad, eso en la pantalla de
- * pago no se lanza. Ahora hay UNA fuente: este endpoint devuelve los dos precios
- * reales, calculados con la MISMA cotización cacheada que se va a usar al cobrar,
- * y la página no calcula nada.
- *
- * Degrada con gracia: si no se puede cotizar el dólar, `mercadopago` viene en
- * null y la página muestra PayPal igual. Mejor sin un precio que con uno inventado.
- */
+/* PLAN PRICES shown on the subscription page. Single source of truth: computed
+ * with the same cached dollar rate used for charging, so displayed and charged
+ * prices always match. If the rate fails, `mercadopago` is null and PayPal is
+ * still shown — better no price than an invented one. */
 const getSubscriptionPrices = async () => {
     const tipos: TipoPlan[] = ['Free', 'Standard', 'Premium'];
 
@@ -1310,9 +1135,8 @@ const getSubscriptionPrices = async () => {
                 p.usdMercadopago > 0 && rate
                     ? {
                           currency: config.mercadopago.currency || 'ARS',
-                          // MISMO redondeo que `usdToPesos`, que es lo que se le
-                          // manda a MercadoPago como `unit_price`. Si acá se
-                          // redondeara distinto, volvería el problema en chico.
+                          // Same rounding as `usdToPesos` (sent as `unit_price`);
+                          // a different rounding here reintroduces the mismatch.
                           amount: Math.round(p.usdMercadopago * rate),
                           usdBase: p.usdMercadopago,
                       }
@@ -1323,32 +1147,9 @@ const getSubscriptionPrices = async () => {
     return { plans, dollarRate: rate };
 };
 
-/* LA PALANCA MANUAL DEL PLAN (admin) — la que hoy no existe.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * POR QUÉ HACE FALTA, Y POR QUÉ ANTES DE LANZAR
- *
- * La suscripción es DE POR VIDA: se paga una vez y no vence. Eso significa que
- * ante un CONTRACARGO —alguien paga, recibe Premium, desconoce el cobro y le
- * devuelven la plata— hoy no hay NINGUNA palanca, ni siquiera manual: el
- * dashboard sólo muestra un resumen (`SubscriptionOverview.jsx`). Esa persona se
- * queda con Premium gratis para siempre.
- *
- * Y sirve para lo contrario, que es igual de importante: si la guarda
- * anti-downgrade rechaza una acreditación legítima, o un pago queda fuera de la
- * banda de monto, alguien pagó y no tiene su plan. Sin esta palanca la única
- * salida era tocar la base a mano.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * DOS DECISIONES:
- *
- *  · **Puede BAJAR el plan**, a diferencia de la acreditación automática. Es todo
- *    el punto: es la única vía por la que un plan puede bajar, y es deliberada,
- *    humana y auditada.
- *  · **Deja rastro** (quién, cuándo, por qué). Una palanca que mueve plata sin
- *    registro es peor que no tenerla: ante una disputa no habría forma de
- *    reconstruir qué pasó.
- */
+/* ADMIN MANUAL PLAN LEVER. Subscriptions are lifetime, so this is the only
+ * deliberate, audited way a plan can go DOWN (e.g. a chargeback) and the rescue
+ * path when a legitimate payment was rejected. It records who, when and why. */
 const setSubscriptionByAdmin = async (
     adminUserId: string,
     profileId: string,
@@ -1358,9 +1159,8 @@ const setSubscriptionByAdmin = async (
     if (!esTipoPlan(tipo)) {
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid subscription plan');
     }
-    // Mismo criterio que en la acreditación: un id inusable NUNCA puede llegar a
-    // mongoose, porque un filtro vacío escribiría sobre el primer documento de la
-    // colección. Acá además el efecto sería otorgar un plan a quien no pagó.
+    // Same rule as creditPayment: an unusable id could match the first document
+    // and grant a plan to someone who never paid.
     if (!esObjectIdUsable(profileId)) {
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid user id');
     }
@@ -1369,8 +1169,7 @@ const setSubscriptionByAdmin = async (
     const ahora = new Date();
     const razon = (motivo || '').slice(0, 500);
 
-    // El plan ANTERIOR se lee antes de pisarlo: sin eso, la fila del historial no
-    // permite saber si el cambio fue una baja (contracargo) o una suba.
+    // Read the previous plan first so the history row shows up/downgrade direction.
     const previo = await NormalUser.findById(profileId)
         .select('subscriptionType')
         .lean();
@@ -1384,14 +1183,13 @@ const setSubscriptionByAdmin = async (
             $set: {
                 subscriptionType: plan.tipo,
                 bondLimit: plan.bondLimit,
-                // Denormalizado del último cambio (para listar sin abrir el array).
+                // Denormalized last change (list without opening the array).
                 subscriptionSetBy: adminUserId,
                 subscriptionSetAt: ahora,
                 subscriptionSetReason: razon,
             },
-            // Y el HISTORIAL, que es lo que de verdad permite reconstruir una
-            // disputa. Acotado a 50 entradas: es una palanca manual, nunca va a
-            // tener volumen, y el tope evita que un documento crezca sin límite.
+            // History is what reconstructs a dispute; capped at 50 entries since
+            // this is a manual lever with no volume.
             $push: {
                 subscriptionHistory: {
                     $each: [
@@ -1400,12 +1198,8 @@ const setSubscriptionByAdmin = async (
                             by: adminUserId,
                             at: ahora,
                             reason: razon,
-                            // Fallback explícito: mongoose DESCARTA las claves
-                            // `undefined` del `$push`, así que un usuario sin
-                            // `subscriptionType` dejaba la fila SIN el campo — y
-                            // `from` existe justamente para poder leer si el
-                            // cambio fue una baja o una suba. Sin él, la fila del
-                            // contracargo no dice de dónde venía.
+                            // Explicit fallback: mongoose drops undefined keys from
+                            // $push, which would leave the row without `from`.
                             from:
                                 (previo as any).subscriptionType ||
                                 ENUM_SUBSCRIPTION_TYPE.Free,
@@ -1436,22 +1230,16 @@ const crearCheckoutMercadopago = async (
     userId: string,
     type: 'Standard' | 'Premium'
 ): Promise<string> => {
-    // Ruta MercadoPago (paralela a PayPal). Devuelve la URL de Checkout Pro.
-    //
-    // CON try/catch, igual que la rama de PayPal. Sin esto, cualquier falla del
-    // SDK o de la API de MercadoPago —una preferencia rechazada, un timeout, una
-    // credencial vencida— salía como un 500 "Something went wrong" genérico,
-    // porque no es un `AppError` y no matchea ninguna rama del manejador global.
-    // En la pantalla de pago, y con la otra pasarela mostrando un mensaje
-    // decente. Era una asimetría sin motivo.
+    // Returns the MercadoPago Checkout Pro URL. try/catch mirrors the PayPal
+    // branch: raw SDK errors are not AppErrors and would surface as a generic 500
+    // on the payment screen.
     try {
         const { url } = await createSubscriptionPreference(userId, type);
         return url;
     } catch (error) {
         // eslint-disable-next-line no-console
         console.error('MercadoPago Preference Error:', error);
-        // Si ya es un AppError (p. ej. "no se pudo obtener la cotización"), se
-        // respeta: ese mensaje es más útil que uno genérico.
+        // Keep existing AppErrors: their message is more useful than a generic one.
         if (error instanceof AppError) throw error;
         throw new AppError(
             httpStatus.INTERNAL_SERVER_ERROR,
@@ -1464,18 +1252,9 @@ const crearCheckoutPaypal = async (
     userId: string,
     type: 'Standard' | 'Premium'
 ): Promise<string> => {
-    // EL PRECIO SALE DE `subscriptionPlans`, NO DE UN LITERAL ACÁ.
-    //
-    // Antes esto decía `if (Standard) 10 else 25`, y `creditPayment` tenía su
-    // PROPIO mapa 10→Standard / 25→Premium para acreditar POR MONTO. Los dos
-    // tenían que coincidir exacto: cambiar el precio acá y olvidarse del otro
-    // significa **que se cobra y no se acredita** (la acreditación devuelve
-    // `unexpected amount`, la persona paga y no recibe nada, y hace falta tocar
-    // la base a mano). Ahora las dos puntas leen el mismo número.
-    //
-    // El `else` implícito tampoco estaba bien: cualquier tipo distinto de
-    // Standard cobraba 25. Hoy zod ya acota `type` al enum, pero la guarda
-    // explícita no depende de que esa validación siga estando.
+    // Price comes from `subscriptionPlans`, not a literal: creditPayment maps
+    // amount→plan, so a mismatch charges without crediting. Explicit guard
+    // instead of the old implicit else.
     if (PLANES[type].usdPaypal <= 0) {
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid subscription plan');
     }
@@ -1499,10 +1278,8 @@ const crearCheckoutPaypal = async (
                 },
             ],
             application_context: {
-                // `brand_name` es lo que PayPal le muestra EN LA PANTALLA DE PAGO
-                // a la persona que está por pagar. Decía, literal, "Your Business
-                // Name": el placeholder de la plantilla, vivo en producción, en la
-                // única pantalla donde alguien entrega plata.
+                // `brand_name` is what PayPal shows on the payment screen (was the
+                // literal template placeholder "Your Business Name" in production).
                 brand_name: 'Bankybondy',
                 landing_page: 'LOGIN',
                 user_action: 'PAY_NOW',
@@ -1544,35 +1321,16 @@ const purchaseSubscription = async (
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
-    // Tipo válido ANTES de reclamar el checkout: un tipo inválido no debe dejar
-    // un reclamo pendiente ni llegar a `nivelDe` (que lo trataría como Free).
+    // Validate the type before claiming a checkout: an invalid type must not
+    // leave a pending claim (nivelDe would treat it as Free).
     if (!esTipoPlan(type) || PLANES[type].nivel === 0) {
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid subscription plan');
     }
 
-    /* ⚠️ NO COBRAR LO QUE NO SE PUEDE ENTREGAR (panel del 11/9).
-     *
-     * La guarda anti-downgrade de `creditPayment` impide que un pago BAJE un plan.
-     * Correcto — pero miraba el problema por la puerta de atrás (los webhooks) y
-     * dejaba la de adelante abierta:
-     *
-     *   1. Alguien con Premium entra a esta pantalla. Los tres botones se ven
-     *      iguales: la página no sabe qué plan tiene.
-     *   2. Clickea "Pagar con PayPal (US$ 10)" en Standard.
-     *   3. PayPal cobra. Se crea la `Transaction`: la plata entra.
-     *   4. La guarda hace su trabajo y NO aplica Standard sobre Premium.
-     *   5. Esa persona pagó 10 dólares por absolutamente nada, y ve "pago
-     *      recibido".
-     *
-     * Lo mismo en chico si un Standard vuelve a comprar Standard.
-     *
-     * El arreglo correcto NO es avisar después: es no abrir el checkout. Acá se
-     * rechaza antes de tocar PayPal o MercadoPago, así que no hay plata que
-     * devolver. El `code` permite que el front muestre un mensaje propio.
-     *
-     * Se compara por NIVEL y no por igualdad para cubrir también el caso
-     * "Premium comprando Standard", que es el que pierde más plata.
-     */
+    /* Do not charge for what cannot be delivered. The anti-downgrade guard in
+     * creditPayment only covers the webhook side; here the checkout is blocked,
+     * so nobody pays for a plan they already own. Compared by level, not equality,
+     * to also cover Premium buying Standard. */
     if (nivelDe(type) <= nivelDe((user as any).subscriptionType)) {
         throw new AppError(
             httpStatus.CONFLICT,
@@ -1584,8 +1342,7 @@ const purchaseSubscription = async (
     const proveedor = normalizarProveedor(provider);
     const ahora = Date.now();
 
-    // Checkout vigente: devolver la MISMA URL en vez de crear otra orden. Es la
-    // diferencia entre un doble clic y una segunda orden pagable.
+    // Reuse a live checkout: a double click must not create a second payable order.
     if (
         esCheckoutReutilizable(
             user.pendingSubscriptionCheckout,
@@ -1597,10 +1354,9 @@ const purchaseSubscription = async (
         return { url: user.pendingSubscriptionCheckout?.url as string };
     }
 
-    // Reclamo ATÓMICO antes de crear la orden. Si otra request ya tiene un
-    // checkout fresco del mismo plan+proveedor, el filtro no matchea y no se
-    // crea una segunda URL. `url: ''` marca "creando"; se libera sola a los 30 s
-    // (ver subscriptionCheckout.ts).
+    // Atomic claim before creating the order: a concurrent request with a fresh
+    // claim for the same plan+provider fails to match. `url: ''` marks "creating";
+    // it self-expires after 30 s (subscriptionCheckout.ts).
     const claim = await NormalUser.findOneAndUpdate(
         { _id: profileId, ...construirFiltroClaim(type, proveedor, ahora) },
         {
@@ -1617,9 +1373,8 @@ const purchaseSubscription = async (
     ).select('pendingSubscriptionCheckout');
 
     if (!claim) {
-        // Perdimos el reclamo: si la otra request ya escribió la URL, es la misma
-        // que este request iba a crear. Si todavía está creando, no se abre una
-        // segunda orden: 409 y el front muestra un mensaje propio.
+        // Lost the claim: reuse the URL if another request already wrote it,
+        // otherwise 409 (no second order while one is being created).
         const actual = await NormalUser.findById(profileId)
             .select('pendingSubscriptionCheckout')
             .lean();
@@ -1663,20 +1418,19 @@ const purchaseSubscription = async (
                       type as 'Standard' | 'Premium'
                   );
 
-        // Guardado condicionado al reclamo que hicimos: si otro request tomó el
-        // documento (vencido / otro plan), no se pisa su URL.
+        // Write only if the claim is still ours (not expired or taken by another plan).
         await NormalUser.updateOne(filtroReclamo, {
             $set: { 'pendingSubscriptionCheckout.url': url },
         });
         return { url };
     } catch (error) {
-        // Liberar el reclamo para reintentar sin esperar los 30 s.
+        // Release the claim for an immediate retry.
         try {
             await NormalUser.updateOne(filtroReclamo, {
                 $unset: { pendingSubscriptionCheckout: '' },
             });
         } catch {
-            // best-effort: el reclamo también vence solo a los 30 s
+            // best-effort: the claim also self-expires after 30 s.
         }
         throw error;
     }
@@ -1685,8 +1439,7 @@ const purchaseSubscription = async (
 const updateBondsVisibility = async (id: string, bondsPublic: unknown) => {
     const updated = await NormalUser.findByIdAndUpdate(
         id,
-        // Boolean estricto: 'false' (string) con Boolean() daria true -> quedaria
-        // publico sin querer. Publico SOLO ante true o 'true'; cualquier otra cosa, privado.
+        // Strict boolean: 'false' as a string would become true via Boolean().
         { bondsPublic: bondsPublic === true || bondsPublic === 'true' },
         { new: true, runValidators: true }
     ).select('bondsPublic');
@@ -1699,9 +1452,7 @@ const updateBondsVisibility = async (id: string, bondsPublic: unknown) => {
 const updatePeopleVisibility = async (id: string, listedInPeople: unknown) => {
     const updated = await NormalUser.findByIdAndUpdate(
         id,
-        // Boolean estricto (igual criterio que bondsPublic): 'false' (string) con
-        // Boolean() daria true -> aparecer sin querer. Listado SOLO ante true o
-        // 'true'; cualquier otra cosa, oculto.
+        // Strict boolean, same as bondsPublic: 'false' string must not list the user.
         { listedInPeople: listedInPeople === true || listedInPeople === 'true' },
         { new: true, runValidators: true }
     ).select('listedInPeople');

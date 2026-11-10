@@ -21,27 +21,17 @@ import {
 let myServer: HTTPServer | undefined;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Dos helpers para que los caminos de MUERTE dejen rastro (10/9, 2ª ronda de panel).
+// Helpers so death paths leave a trace.
 //
-// `logSeguro`: loguear NO puede tirar. `serializar` y el `printf` ya están
-// blindados, pero queda una superficie fuera del alcance de logger.ts: winston
-// hace `Object.assign({}, defaultMeta, meta, ...)` ANTES de correr cualquier
-// format, así que un meta con un getter que lanza tira desde adentro de winston.
-// Si eso pasara en el handler de `unhandledRejection`, se convertiría en
-// `uncaughtException` y mataría el proceso — el arreglo anti-caída como causa de
-// la caída.
-//
-// `salirDejandoRastro`: winston escribe a archivo de forma ASÍNCRONA, así que un
-// `process.exit(1)` en el mismo tick se come justo el log que explica POR QUÉ se
-// salió. Se midió: sin margen, la línea no llega al archivo. Se aplicaba sólo en
-// el cortacircuitos y faltaba en los DOS caminos más importantes: el crash con
-// estado corrupto y el arranque fallido.
+// `logSeguro`: logging must never throw (winston's Object.assign on meta runs
+// before any format). `salirDejandoRastro`: winston writes async, so an exit in
+// the same tick swallows the log that explains why we exited.
 // ───────────────────────────────────────────────────────────────────────────
 const logSeguro = (mensaje: string, error?: unknown) => {
     try {
         errorLogger.error(mensaje, error);
     } catch {
-        // Último recurso: la consola cruda, que no pasa por winston.
+        // Last resort: raw console, bypassing winston.
         // eslint-disable-next-line no-console
         console.error(mensaje, (error as Error)?.stack || error);
     }
@@ -51,8 +41,8 @@ const salirDejandoRastro = (codigo: number) => {
     setTimeout(() => process.exit(codigo), 100).unref();
 };
 
-// Excepciones no capturadas: estado corrupto -> salir para que el
-// supervisor (PM2) reinicie el proceso limpio.
+// Uncaught exception: state may be corrupt -> exit so the supervisor (PM2)
+// restarts a clean process.
 process.on('uncaughtException', (error) => {
     logSeguro('Uncaught Exception:', error);
     salirDejandoRastro(1);
@@ -67,10 +57,9 @@ async function main() {
         });
         logger.info('DB Connected Successfully');
 
-        // Aviso de config: el login con Google verifica el idToken contra
-        // GOOGLE_CLIENT_ID (auth.services). Si falta, el login con Google (camino
-        // PRINCIPAL de registro) falla en runtime. No se aborta el boot (el resto
-        // del sistema anda), pero se deja un error VISIBLE en los logs de PM2.
+        // Config warning: Google login verifies the idToken against
+        // GOOGLE_CLIENT_ID; if missing it fails at runtime. Boot continues, but
+        // the error is visible in PM2 logs.
         if (!process.env.GOOGLE_CLIENT_ID) {
             errorLogger.error(
                 '[boot] GOOGLE_CLIENT_ID ausente: el login con Google va a fallar. Setear en el .env.'
@@ -85,13 +74,9 @@ async function main() {
                 `Server ${etiquetaInstancia()} running on http://0.0.0.0:${port}`
             );
 
-            // ESCALA HORIZONTAL: las migraciones y el sembrado corren en UNA sola
-            // instancia. Con `WEB_CONCURRENCY > 1`, PM2 levanta N copias de este
-            // archivo y las cuatro de abajo saldrían en paralelo contra la misma
-            // base — `collapseMatchNotifications` incluso colapsa duplicados y
-            // crea un índice único. Son idempotentes, así que el daño esperado es
-            // ruido y trabajo repetido, no corrupción; pero no hay ninguna razón
-            // para pagarlo N veces. Ver utilities/instancia.ts.
+            // HORIZONTAL SCALE: migrations and seeding run on one instance only.
+            // All are idempotent, but no reason to pay for them N times.
+            // See utilities/instancia.ts.
             if (!esInstanciaLider()) {
                 logger.info(
                     `[boot ${etiquetaInstancia()}] instancia secundaria: sirve tráfico, no corre migraciones.`
@@ -105,35 +90,33 @@ async function main() {
                     (err as Error)?.message
                 )
             );
-            // Migración idempotente: colapsa las notificaciones MATCH duplicadas
-            // que dejó el comportamiento anterior y crea el índice único por
-            // vínculo. Fire-and-forget: nunca bloquea ni aborta el arranque.
+            // Idempotent migration: collapse duplicate MATCH notifications and
+            // create the unique index. Fire-and-forget; never blocks boot.
             collapseMatchNotifications().catch((err) =>
                 errorLogger.error(
                     'collapseMatchNotifications fallo:',
                     (err as Error)?.message
                 )
             );
-            // Migración idempotente: sube a 25 a los usuarios free con el límite
-            // viejo (10). Fire-and-forget: nunca bloquea ni aborta el arranque.
+            // Idempotent migration: raise free users with the old limit (10) to 25.
+            // Fire-and-forget.
             bumpFreeBondLimit().catch((err) =>
                 errorLogger.error(
                     'bumpFreeBondLimit fallo:',
                     (err as Error)?.message
                 )
             );
-            // Migración idempotente: marca applied:true las calificaciones viejas
-            // (pre rating-en-suspenso) para no regresar reputaciones. Fire-and-forget.
+            // Idempotent migration: mark old ratings applied:true so reputations do
+            // not regress. Fire-and-forget.
             applyExistingRatings().catch((err) =>
                 errorLogger.error(
                     'applyExistingRatings fallo:',
                     (err as Error)?.message
                 )
             );
-            // Migración idempotente: siembra `matchesNextAt` y normaliza
-            // `isLinked` en los vínculos legados. SIN ESTO el sweep no ve a los
-            // vínculos anteriores a la agenda (un `$lte` no matchea un campo
-            // ausente) y quedarían sin recomputarse para siempre. Fire-and-forget.
+            // Idempotent migration: seed `matchesNextAt` and normalize `isLinked` on
+            // legacy links. Without it the sweep never sees pre-agenda links (`$lte`
+            // does not match a missing field). Fire-and-forget.
             backfillAgendaMatcheo()
                 .catch((err) =>
                     errorLogger.error(
@@ -141,9 +124,9 @@ async function main() {
                         (err as Error)?.message
                     )
                 )
-                // DESPUÉS del de la agenda, y aunque ese falle: normaliza
-                // `isPause`/`isLinked` ausentes, y eso cambia quién tiene vínculos
-                // vivos. Siembra `hasActiveBonds` (orden de Personas) en todos.
+                // After the agenda step, even if it failed: normalize missing
+                // isPause/isLinked (changes who has live links) and seed
+                // hasActiveBonds for everyone.
                 .then(() => reconciliarVinculosVivos())
                 .then((r) =>
                     logger.info(
@@ -161,88 +144,47 @@ async function main() {
             errorLogger.error('Socket initialization failed:', err)
         );
 
-        // El matcheo pesado corre en un PROCESO DEDICADO (dist/worker.js, PM2
-        // app "bankybondy-matcher"). La API sólo ENCOLA recomputos vía Redis
-        // (BullMQ) para no bloquear el event loop de HTTP/sockets. Por eso aquí
-        // ya NO se arrancan startMatchingWorker()/startMatchingSweep().
+        // Heavy matching runs in a dedicated process (dist/worker.js, PM2
+        // "bankybondy-matcher"). The API only enqueues recomputes via Redis (BullMQ)
+        // to keep the HTTP/socket event loop free, so no worker/sweep starts here.
     } catch (error) {
         logSeguro('Error in main function:', error);
-        // No se pudo arrancar (p.ej. Mongo caído): abortar para reinicio limpio.
-        // Con margen, si no el log del arranque fallido se pierde justo cuando
-        // es lo único que hay para diagnosticar.
+        // Boot failed (e.g. Mongo down): abort for a clean restart. Delayed so the
+        // failure log is not lost.
         salirDejandoRastro(1);
     }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// RECHAZOS NO MANEJADOS: LOGUEAR Y SEGUIR (cambio de postura, 10/9)
+// UNHANDLED REJECTIONS: LOG AND KEEP SERVING
 //
-// ANTES: `myServer.close(() => process.exit(1))` + salida forzada a los 10 s.
-// Se midió lo que eso hacía DE VERDAD y era mucho peor que "reiniciar":
-// `server.close()` NO cierra los websockets vivos, así que el callback NUNCA
-// disparaba y siempre ganaba el timeout → **10 SEGUNDOS RECHAZANDO TODO**
-// (ECONNREFUSED para cada request y cada handshake nuevo), después la salida,
-// después la reconexión en manada de todos los clientes, cada uno con
-// `jwt.verify` + `User.findById`. Con `instances: 1` no hay redundancia: era
-// caída total de 15-25 s por CADA promesa rechazada suelta.
+// Old behavior was `myServer.close()` + forced exit, but server.close() never
+// closes live websockets, so the callback never fired and the 10s timeout always
+// won: 10s refusing every request plus a reconnect stampede. The trigger is
+// reachable (@socket.io/redis-adapter publishes without await/catch, so a Redis
+// blip during a chat message took the API down).
 //
-// Y el gatillo alcanzable HOY no es exótico: `@socket.io/redis-adapter` hace
-// `pubClient.publish()` sin await ni catch en 11 sitios, y node-redis rechaza
-// TODA promesa en vuelo ante cualquier error del socket. O sea: un parpadeo de
-// Redis durante un mensaje de chat tumbaba la API para todos. Peor todavía, con
-// una sola instancia ese publish no le sirve a nadie —la entrega local corre
-// igual— así que el sistema se suicidaba por un mensaje que nadie necesitaba.
-//
-// POR QUÉ SEGUIR ES SEGURO: un `unhandledRejection` es, por definición, una
-// promesa que NADIE estaba esperando. La función async que la produjo ya se
-// detuvo y no va a continuar, se salga o no. Salir no deshace su trabajo
-// parcial: sólo AGREGA el daño de matar todo lo concurrente. Se revisaron los
-// caminos de estado (transacciones de mongoose, escrituras multi-paso, plata,
-// jobs de BullMQ) y no se encontró ninguno donde seguir sea peor que reiniciar.
-//
-// `uncaughtException` (arriba) SIGUE MATANDO el proceso, a propósito: ahí el
-// estado sí puede estar corrupto. Y hoy no lo dispara nada — se barrió el árbol
-// buscando esa clase y no quedó ninguna instancia.
-//
-// El WORKER (`worker.ts`) conserva el `exit(1)`: no tiene websockets, reinicia
-// gratis y BullMQ re-entrega los jobs.
+// Safe because an unhandled rejection is a promise nobody awaited; exiting only
+// kills concurrent work. uncaughtException still exits (state may be corrupt).
+// The worker (worker.ts) keeps exit(1): no websockets, BullMQ redelivers.
 // ───────────────────────────────────────────────────────────────────────────
 
-// CORTACIRCUITOS: el único escenario donde "seguir" es peor que salir es un
-// proceso ENCAJADO (p. ej. pool de Mongo agotado) donde el rechazo se repite
-// para siempre y la degradación silenciosa reemplaza al reinicio ruidoso. Si
-// llueven rechazos, se sale igual.
+// CIRCUIT BREAKER: only a wedged process (e.g. exhausted Mongo pool) repeats the
+// rejection forever, so a flood of rejections still exits.
 const RECHAZOS_VENTANA_MS =
     Number(process.env.RECHAZOS_VENTANA_MS) || 60_000;
 const RECHAZOS_LIMITE = Number(process.env.RECHAZOS_LIMITE) || 60;
 
-// VENTANA MÓVIL DE VERDAD: se guardan los timestamps y se descartan los que
-// salieron de la ventana. La versión anterior usaba una ventana FIJA
-// (`ventanaDesde` + reset) y tenía dos agujeros, los dos probados por el panel:
-//   - 19 rechazos en t=59s y 19 más en t=60.001s = 38 en un segundo, y NO
-//     disparaba, porque el borde reseteaba el contador a cero.
-//   - un goteo sostenido de 19 por minuto no disparaba NUNCA — que es
-//     exactamente el "proceso encajado" que este cortacircuitos dice cubrir.
-// CORRECCIÓN (2ª ronda de panel): una versión anterior de este comentario decía
-// que "el array está acotado por construcción: nunca supera RECHAZOS_LIMITE".
-// Es FALSO y está medido: llega a 38 en el escenario del borde que se describe
-// acá arriba, y a miles en una tormenta, porque el `exit` va diferido y se sigue
-// apilando mientras tanto. En memoria es trivial (son números), pero la
-// afirmación era falsa.
-//
-// AJUSTE DE SENSIBILIDAD, decidido a conciencia: los números 20/60s venían de
-// cuando la ventana FIJA los volvía mucho más laxos en la práctica. Con ventana
-// móvil de verdad, 20 en 60 s es un ritmo alcanzable en un hipo de Mongo o de S3
-// en un minuto cargado, SIN que el proceso esté encajado — y disparar cuesta
-// exactamente lo que esta tanda quiere evitar (reinicio + todos los websockets
-// cortados + reconexión en manada). Se sube el umbral para que siga cubriendo el
-// "proceso encajado" sin castigar un mal minuto. Ajustable por env.
+// TRUE SLIDING WINDOW: keep timestamps, drop expired ones. A fixed window had two
+// holes (boundary reset the counter: 19+19 in ~1s did not fire; a steady 19/min
+// never fired, which is the wedged case). The 20/60s threshold was raised because
+// a real sliding window is stricter and a bad minute should not cost a restart.
+// Env-tunable.
 const rechazosRecientes: number[] = [];
 
 process.on('unhandledRejection', (error) => {
-    // El stack se imprime gracias a los arreglos de shared/logger.ts. Sin eso,
-    // esto sería un log ciego, que es peor que el crash que reemplaza.
-    // `logSeguro` porque loguear no puede tirar acá adentro (ver arriba).
+    // Stack printing comes from shared/logger.ts; logSeguro because logging must
+    // not throw in here (see above).
     logSeguro('Unhandled Rejection (se sigue sirviendo):', error);
 
     const ahora = Date.now();
@@ -255,9 +197,7 @@ process.on('unhandledRejection', (error) => {
     }
 
     if (rechazosRecientes.length >= RECHAZOS_LIMITE) {
-        // `exit` DIFERIDO: winston escribe a archivo de forma asíncrona, así que
-        // un `process.exit(1)` en el mismo tick se come justo el log que explica
-        // POR QUÉ se salió. Un tick de margen alcanza para que se vacíe.
+        // Deferred exit: winston writes async, a same-tick exit would swallow this.
         errorLogger.error(
             `Cortacircuitos: ${rechazosRecientes.length} rechazos en menos de ${
                 RECHAZOS_VENTANA_MS / 1000
@@ -267,40 +207,25 @@ process.on('unhandledRejection', (error) => {
     }
 });
 
-// Apagado graceful: cerrar servidor HTTP y conexion de Mongo.
+// Graceful shutdown: close the HTTP server and Mongo connection.
 const gracefulShutdown = (signal: string) => {
     logger.info(`${signal} received, shutting down gracefully`);
     if (myServer) {
-        // CERRAR LOS WEBSOCKETS PRIMERO (arreglado 10/9, panel adversarial).
-        //
-        // `server.close()` deja de aceptar conexiones nuevas pero NO cierra las
-        // vivas, y un websocket no se cierra solo. Como nadie llamaba `io.close()`
-        // en todo el árbol, el callback de abajo NUNCA disparaba mientras hubiera
-        // un socket abierto: ganaba siempre el `setTimeout` de 10 s, se salía con
-        // código 1, y `closeMatchingRobot()` y `mongoose.connection.close()` NO
-        // CORRÍAN NUNCA.
-        //
-        // Es el MISMO defecto que motivó el cambio de postura de arriba, y había
-        // quedado vivo en el camino que de verdad se ejecuta siempre: este corre
-        // en CADA `pm2 restart`, o sea en cada deploy. El otro sólo corría ante
-        // un rechazo suelto.
+        // CLOSE WEBSOCKETS FIRST: server.close() does not close live sockets, so the
+        // callback below never fired while any socket was open; the 10s timeout won
+        // and closeMatchingRobot()/mongoose close never ran on any deploy.
         try {
             getIO().close();
         } catch {
-            // `getIO()` tira si el socket nunca se inicializó (arranque abortado
-            // temprano). No hay nada que cerrar; se sigue con el apagado.
+            // getIO() throws if the socket was never initialized (boot aborted
+            // early); nothing to close, so continue shutting down.
         }
         myServer.close(async () => {
             try {
-                // La presencia se drena ANTES de cerrar nada más: esta instancia
-                // se borra a sí misma del estado compartido de Redis. Sin esto,
-                // CADA deploy dejaría fantasma a todos sus conectados hasta que el
-                // barrido por latido los levante (hasta ~2 min de gente que figura
-                // online sin estarlo, justo cuando más reinicios hay).
-                //
-                // Va acá y no antes porque `myServer.close()` ya dejó de aceptar
-                // conexiones e `io.close()` cerró los websockets: no puede entrar
-                // nadie nuevo después de drenar.
+                // Drain presence BEFORE closing anything else: this instance removes
+                // itself from shared Redis state, else every deploy leaves phantoms
+                // online until the heartbeat sweep (~2 min). Safe here because no new
+                // connection can arrive after close().
                 await closePresence();
                 await closeMatchingRobot();
                 await mongoose.connection.close();

@@ -61,7 +61,7 @@ export function projectIdentityBackfill(d: MaintenanceDocument): Projection {
     return { issues, set };
 }
 
-/** $expr compares the scalar BSON value, unlike ordinary query equality/type which can match array elements. */
+/** $expr compares the scalar BSON value; ordinary equality can match array elements. */
 export function observedStateGuard(d: MaintenanceDocument, observedFields: readonly string[] = fields): mongo.Filter<MaintenanceDocument> {
     return { _id: d._id, $and: observedFields.filter(f => f !== '_id').map(f => {
         if (!has(d, f)) return { [f]: { $exists: false } };
@@ -78,7 +78,7 @@ export function observedStateGuard(d: MaintenanceDocument, observedFields: reado
 
 function snapshot(d: MaintenanceDocument): MaintenanceDocument {
     const result = Object.fromEntries(fields.filter(f => has(d, f) && f !== 'offer' && f !== 'want').map(f => [f, d[f]]));
-    // Raw public text is never persisted in the manifest. Digests also detect later equivalent-text edits.
+    // Raw public text is never persisted; digests also catch equivalent-text edits.
     result.textDigest = createHash('sha256').update(JSON.stringify([d.offer, d.want])).digest('hex');
     return result;
 }
@@ -126,7 +126,8 @@ const batch = (value = 100) => {
     return value;
 };
 
-/** One projected cursor, grouped by user. A cap is a blocking incomplete report, never truncation or a clean preflight. */
+/** One projected cursor, grouped by user. A cap produces a blocking incomplete
+ * report, never truncation or a clean preflight. */
 export async function preflightMaintenance(collection: MaintenanceCollection, batchSize = 100, identityCap = 10000): Promise<MaintenanceReport> {
     batch(batchSize);
     if (!Number.isSafeInteger(identityCap) || identityCap < 1 || identityCap > 10000) throw new Error('identityCap must be 1..10000');
@@ -147,7 +148,7 @@ export async function preflightMaintenance(collection: MaintenanceCollection, ba
             if (invalid.length) { report.invalid++; issue(d._id, invalid.join(', ')); }
             if (Object.keys(repair.set).length) report.pendingRepairs++;
             if (textValid && (d.offerKey !== canonicalBondText(d.offer) || d.wantKey !== canonicalBondText(d.want))) report.pendingKeys++;
-            // Preflight includes missing/null isLinked, BEFORE the equality-domain repair.
+            // Preflight includes missing/null isLinked, before the equality repair.
             if (d.status !== WAITING || d.isLinked === true || !textValid || !objectId(d.user) || !objectId(d._id)) continue;
             if (owner !== String(d.user)) { identities.clear(); identityBytes = 0; owner = String(d.user); }
             const key = JSON.stringify([canonicalBondText(d.offer), canonicalBondText(d.want)]);
@@ -212,7 +213,7 @@ export async function applyMaintenanceBatch(collection: MaintenanceCollection, k
             const decision = makeWriteDecision(kind, d);
             if (decision) {
                 await options.journal({ event: 'prepared', write: decision.manifest });
-                // Native collections bypass Mongoose timestamps/defaults/hooks entirely.
+                // Native collections bypass Mongoose timestamps/defaults/hooks.
                 const result = await collection.updateOne(decision.filter, decision.update, { writeConcern: { w: 'majority' } });
                 if (!result.acknowledged || result.matchedCount !== 1 || result.modifiedCount !== 1) {
                     conflict = true;
@@ -253,7 +254,8 @@ export async function installIdentityIndex(collection: MaintenanceCollection, op
     return verifyMaintenance(collection, 'identity', options.batchSize);
 }
 
-/** Accept only a durable applied record, never a baseline/prepared record. Newer values cause a skip, not a restore. */
+/** Accept only a durable applied record, never baseline/prepared. Newer values
+ * cause a skip, not a restore. */
 export async function rollbackMaintenanceWrite(collection: MaintenanceCollection, record: JournalEvent, journal: MaintenanceJournal) {
     if (record.event !== 'applied') throw new Error('Rollback requires an acknowledged applied record');
     const entry = record.write;
@@ -269,9 +271,8 @@ export async function rollbackMaintenanceWrite(collection: MaintenanceCollection
     return restored;
 }
 
-/** The caller injects explicitly invoked, throwing/verified wrappers for existing invalidation and active-bond helpers.
- * No application config, clients, workers or listeners are imported by maintenance code.
- */
+/** The caller injects throwing/verified wrappers for existing invalidation and
+ * active-bond helpers; maintenance code imports no config, clients or workers. */
 export async function reconcileMaintenanceWrite(collection: MaintenanceCollection, record: JournalEvent, hooks: {
     invalidateAndRefresh: (id: string, active: boolean) => Promise<void>;
     recalculateActiveBonds: (user: string) => Promise<void>;

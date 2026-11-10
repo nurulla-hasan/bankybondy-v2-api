@@ -5,7 +5,6 @@ const messageSchema = new Schema<IMessage>(
     {
         text: {
             type: String,
-            // required: true,
             default: '',
         },
         imageUrl: {
@@ -45,7 +44,7 @@ const messageSchema = new Schema<IMessage>(
     }
 );
 
-// Indice: la lista de mensajes filtra por conversationId y ordena por fecha.
+// Message list filters by conversationId and sorts by date.
 messageSchema.index({ conversationId: 1, createdAt: -1 });
 
 const Message = model<IMessage>('Message', messageSchema);

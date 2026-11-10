@@ -6,8 +6,8 @@ import { getCloudFrontUrl } from '../../helper/mutler-s3-uploader';
 import catchAsync from '../../utilities/catchasync';
 import sendResponse from '../../utilities/sendResponse';
 
-// Prefijos S3 de los archivos de CONVERSACIÓN (lo único que el front borra por
-// este endpoint, staged antes de enviar). Ver deleteFiles.
+// S3 prefixes of CONVERSATION files (the only ones the front deletes here,
+// staged before sending). See deleteFiles.
 const CONVERSATION_PREFIXES = [
     'uploads/images/conversation_image/',
     'uploads/pdf/conversation_pdf/',
@@ -55,13 +55,11 @@ const deleteFiles = catchAsync(async (req, res) => {
             'files must be an array of URLs'
         );
     }
-    // Seguridad (IDOR): antes se borraba CUALQUIER key S3 que el cliente pasara
-    // (fotos de perfil, covers de proyecto/institución, banners de otros, etc.).
-    // Ahora el endpoint se acota a los archivos de CONVERSACIÓN Y, además, a los
-    // que pertenecen al que borra: las keys de chat se namespacean por dueño
-    // (uploads/.../conversation_x/<profileId>/<archivo>) en el uploader, y acá se
-    // valida que el segmento de dueño coincida con el profileId del que pide. Así
-    // un usuario no puede borrar los adjuntos de chat de otro aunque tenga la URL.
+    // Security (IDOR): this used to delete ANY S3 key the client sent (profile
+    // photos, project covers, other users' banners). Now it is limited to
+    // CONVERSATION files, and only the caller's own: chat keys are namespaced by
+    // owner (uploads/.../conversation_x/<profileId>/<file>), so the owner segment
+    // must match the requesting profileId.
     const ownerId = String((req.user as any)?.profileId || '');
     const isOwnConversationFile = (url: string): boolean => {
         try {

@@ -5,7 +5,6 @@ import sendResponse from '../../utilities/sendResponse';
 import TopicServices from './topic.service';
 import { getCloudFrontUrl } from '../../helper/mutler-s3-uploader';
 
-// Create Topic
 const createTopic = catchAsync(async (req, res) => {
     const file: any = req.files?.topic_image;
     if (req.files?.topic_image) {
@@ -20,7 +19,6 @@ const createTopic = catchAsync(async (req, res) => {
     });
 });
 
-// Get All Topics
 const getAllTopics = catchAsync(async (req, res) => {
     const result = await TopicServices.getAllTopics(req.query);
     sendResponse(res, {
@@ -31,7 +29,6 @@ const getAllTopics = catchAsync(async (req, res) => {
     });
 });
 
-// Get Topic by ID
 const getTopicById = catchAsync(async (req, res) => {
     const { topicId } = req.params;
     const result = await TopicServices.getTopicById(topicId);
@@ -43,7 +40,6 @@ const getTopicById = catchAsync(async (req, res) => {
     });
 });
 
-// Update Topic
 const updateTopic = catchAsync(async (req, res) => {
     const file: any = req.files?.topic_image;
     if (req.files?.topic_image) {
@@ -59,7 +55,6 @@ const updateTopic = catchAsync(async (req, res) => {
     });
 });
 
-// Delete Topic
 const deleteTopic = catchAsync(async (req, res) => {
     const { topicId } = req.params;
     const result = await TopicServices.deleteTopic(topicId);

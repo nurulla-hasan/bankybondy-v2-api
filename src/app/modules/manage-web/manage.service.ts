@@ -236,7 +236,6 @@ const getSlider = async () => {
 const editSlider = async (req: Request) => {
     const { files, body } = req;
     const { id } = req.params;
-    // console.log(body);
     let image = undefined;
     //@ts-ignore
     if (files && files.image) {
@@ -249,7 +248,6 @@ const editSlider = async (req: Request) => {
         throw new AppError(404, 'Slider program not found');
     }
     const { ...updateData } = body;
-    // console.log(updateData);
     const result = await Slider.findOneAndUpdate(
         { _id: id },
         {

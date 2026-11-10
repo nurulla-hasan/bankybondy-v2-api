@@ -2,9 +2,9 @@ import { z } from 'zod';
 
 const createBondRequestValidationSchema = z.object({
     body: z.object({
-        // `.trim().min(1)`: un offer/want vacío pasaba la validación, y luego
-        // `generateEmbedding('')` devolvía [] → el modelo (vector length>0) fallaba
-        // dentro de la transacción → 500 opaco en vez de un 400 claro.
+        // `.trim().min(1)`: an empty offer/want passed validation, then
+        // `generateEmbedding('')` returned [] and the model failed inside the
+        // transaction -> opaque 500 instead of a clear 400.
         offer: z.string({ required_error: 'Give is required' }).trim().min(1, 'Give is required'),
         want: z.string({ required_error: 'Get is required' }).trim().min(1, 'Get is required'),
         radius: z.number({ required_error: 'Radius is required' }).optional(),
@@ -15,7 +15,7 @@ const createBondRequestValidationSchema = z.object({
 const updateBondRequestValidationSchema = z.object({
     body: z.object({
         isPause: z.boolean().optional(),
-        // Si se envían, no pueden quedar vacíos (mismo motivo que en create).
+        // If sent, they can't be empty (same reason as in create).
         offer: z.string().trim().min(1).optional(),
         want: z.string().trim().min(1).optional(),
         radius: z.number().optional(),

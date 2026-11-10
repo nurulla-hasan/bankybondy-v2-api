@@ -10,7 +10,7 @@ const createReport = async (profileId: string, payload: IReport) => {
     if (!reportTo) {
         throw new AppError(httpStatus.NOT_FOUND, 'Reported user not found');
     }
-    // Allowlist (anti mass-assignment): `reportFrom` (quien reporta) se fuerza.
+    // Allowlist (anti mass-assignment): `reportFrom` (the reporter) is forced.
     const result = await Report.create({
         reportTo: payload.reportTo,
         incidentType: payload.incidentType,

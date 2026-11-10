@@ -1,18 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Cómputo del matcheo de bonds (pares + ciclos) con el finalScore real.
- *
- * Reúne: candidatos de alta calidad (búsqueda vectorial), reputación cacheada,
- * proximidad y frescura, y produce los tratos posibles rankeados por finalScore.
- * Es reutilizable tanto por la petición (compute-on-miss) como por el robot (paso 5).
- *
- * NO importa bondRequest.service para evitar dependencias circulares: los
- * helpers semánticos se definen acá.
+/* Bond matching compute (pairs + cycles) -> ranked deals by the real finalScore, reused by
+ * compute-on-miss and the robot (step 5). No bondRequest.service import (circular deps).
  */
 import mongoose from 'mongoose';
 import NormalUser from '../normalUser/normalUser.model';
 import BondMatch from '../bondMatch/bondMatch.model';
-// Solo el MODELO (no el service) para sellar `matchesComputedAt`: importar el
-// modelo no crea la dependencia circular que sí traería importar el service.
+// Model only (not the service) to seal `matchesComputedAt`: no circular dependency.
 import BondRequest from './bondRequest.model';
 import { BondMatchType, IMatchScoreParts } from '../bondMatch/bondMatch.interface';
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
@@ -46,15 +39,13 @@ export interface MatchRecord {
     size: number;
 }
 
-// ---- helpers semánticos (autocontenidos) ----
+// ---- semantic helpers (self-contained) ----
 
-// Vectores de OpenAI (`text-embedding-3-small`) vienen L2-normalizados, así que
-// cos == producto punto. Pre-normalizamos UNA vez a Float32Array (defensivo,
-// barato) y en el hot loop solo hacemos un dot product: sin magnitudes ni sqrt
-// por par. El resultado es numéricamente idéntico al cos previo (dot de vectores
-// unitarios == coseno), conservando escala, `minScore` y gates de calidad.
+// OpenAI embeddings (`text-embedding-3-small`) are L2-normalized, so dot == cosine. We
+// pre-normalize once to Float32Array and the hot loop only does a dot product; numerically
+// identical to the previous cos, preserving scale, `minScore` and the quality gates.
 
-/** L2-normaliza un vector crudo a Float32Array UNA sola vez. null si vacío. */
+/** L2-normalizes a raw vector to Float32Array once. null if empty. */
 const normalizeToF32 = (v: unknown): Float32Array | null => {
     if (!Array.isArray(v) || v.length === 0) return null;
     const f = new Float32Array(v.length);
@@ -72,7 +63,7 @@ const normalizeToF32 = (v: unknown): Float32Array | null => {
     return f;
 };
 
-/** Producto punto sobre vectores YA normalizados == coseno. Sin sqrt por llamada. */
+/** Dot product over already-normalized vectors == cosine. No sqrt per call. */
 const dot = (a: Float32Array, b: Float32Array): number => {
     const n = Math.min(a.length, b.length);
     let s = 0;
@@ -87,11 +78,9 @@ const normalizeText = (s?: string) =>
         .replace(/\s+/g, ' ')
         .trim();
 
-/** Calidad de una cadena a partir de sus aristas: MISMA vara que los pares
- *  (`semanticQuality`): `wMin·peor + (1-wMin)·promedio`. Generaliza la mezcla a N
- *  aristas para que un ciclo con varios matches buenos NO quede aplastado por su
- *  eslabón más débil (como pasaba con el `min` pelado). Los valores ya están en
- *  [0,1], así que la mezcla también. */
+/** Chain quality from its edges: same yardstick as pairs (`semanticQuality`),
+ *  `wMin·worst + (1-wMin)·mean`, so a cycle is not crushed by its weakest link. Values are
+ *  already in [0,1], so is the blend. */
 const blendEdges = (edges: number[]): number => {
     if (!edges.length) return 0;
     const min = Math.min(...edges);
@@ -100,12 +89,8 @@ const blendEdges = (edges: number[]): number => {
 };
 
 /**
- * Similitud direccional de un borde (el deseo de A satisfecho por la oferta de B),
- * operando sobre los Float32Array pre-normalizados: `sim` es un dot product ==
- * coseno de vectores unitarios. El comodín "surprise" se aplica SIMÉTRICO: si el
- * DESEO es surprise ("acepto cualquier oferta") o la OFERTA es surprise ("doy lo
- * que busques"), el borde toma el puntaje comodín (piso/techo, ver matching.config
- * y surpriseAdjustedScore). Así funciona tanto `Pido·Sorpresa` como `Ofrezco·Sorpresa`.
+ * Directional edge (A's want met by B's offer) over pre-normalized vectors: dot == cosine.
+ * "surprise" applies symmetrically (want OR offer); "empty" takes priority, band-only.
  */
 const directionalScoreF32 = (
     want: string,
@@ -117,20 +102,19 @@ const directionalScoreF32 = (
     const offerEmpty = normalizeText(offer) === 'empty';
     const wantSurprise = normalizeText(want) === 'surprise';
     const offerSurprise = normalizeText(offer) === 'surprise';
-    // 'vacío' (nada) tiene PRIORIDAD semántica: su vector no tiene señal (se parece
-    // solo a sí mismo → coseno espurio), así que se resuelve SOLO por banda, no por
-    // similitud. Ver Matcheo-Comodines-Spec §4: vacío↔vacío=encuentro (alto),
-    // vacío↔sorpresa=mixed (flojo), vacío↔concreto=0 (excluido).
+    // 'empty' has semantic priority: its vector carries no signal (spurious cosine), so it is
+    // resolved by band only: empty↔empty = encounter (high), empty↔surprise = mixed (weak),
+    // empty↔concrete = 0 (excluded).
     if (wantEmpty || offerEmpty) {
         return emptyEdgeScore(wantEmpty, wantSurprise, offerEmpty, offerSurprise);
     }
-    // Sin vacío: la oferta necesita vector real. 'surprise' SÍ tiene vector.
+    // Without empty, the offer needs a real vector. 'surprise' does have one.
     if (!offerF32 || offerF32.length === 0) return 0;
     const sim = wantF32 && wantF32.length ? dot(wantF32, offerF32) : 0;
     return surpriseAdjustedScore(sim, wantSurprise, offerSurprise);
 };
 
-/** Distancia en km entre dos puntos [lng, lat] (haversine). */
+/** Haversine distance in km between two [lng, lat] points. */
 const haversineKm = (a?: number[], b?: number[]): number | undefined => {
     if (!a || !b || a.length < 2 || b.length < 2) return undefined;
     const R = 6371;
@@ -155,9 +139,9 @@ const getPairMatchType = (candidate: any): MatchType => {
     return 'entry';
 };
 
-// ---- cómputo principal ----
+// ---- main compute ----
 
-/** Computa todos los tratos posibles (pares + ciclos 3–N) para un bond de partida. */
+/** Computes all possible deals (pairs + cycles of 3–N) for a starting bond. */
 export const computeMatchesForBond = async (
     startRequest: any,
     userId: string
@@ -167,11 +151,9 @@ export const computeMatchesForBond = async (
     const startModality = startRequest.modality;
     const isOnline = startRequest.modality === 'online';
 
-    // Geo como PUNTAJE, no como filtro (default). Por defecto NO excluimos
-    // candidatos por distancia: la cercanía sigue influyendo vía proximityFactor
-    // en el score, pero nadie queda afuera por no tener coordenadas o estar lejos.
-    // Evita el "0 matches por ubicación" cuando la contraparte no tiene coords.
-    // Reactivable con MATCH_GEO_HARD_FILTER=true si en el futuro conviene un radio real.
+    // Geo as SCORE, not filter (default): no candidate is dropped by distance; proximity still
+    // weighs in via proximityFactor, so missing coords never means "0 matches by location".
+    // Re-enable a real radius with MATCH_GEO_HARD_FILTER=true.
     const geoFilter: any = {};
     const geoHardFilter =
         (process.env.MATCH_GEO_HARD_FILTER ?? 'false').toLowerCase() === 'true';
@@ -196,10 +178,8 @@ export const computeMatchesForBond = async (
         geoFilter
     );
 
-    // Pre-normalización ÚNICA de los vectores 1536-dim a Float32Array. A partir
-    // de acá el hot loop O(N²) usa solo dot products (== coseno), sin recalcular
-    // magnitudes ni sqrt por par. Se cachea en el propio objeto (_offerF32 /
-    // _wantF32) para que tanto los pares como las aristas del grafo lo reutilicen.
+    // Single pre-normalization of the 1536-dim vectors; from here the O(N²) hot loop is
+    // dot-only. Cached on the object (_offerF32 / _wantF32) so pairs and graph edges reuse it.
     startRequest._offerF32 = normalizeToF32(startRequest.offerVector);
     startRequest._wantF32 = normalizeToF32(startRequest.wantVector);
     for (const c of candidates) {
@@ -207,7 +187,7 @@ export const computeMatchesForBond = async (
         c._wantF32 = normalizeToF32(c.wantVector);
     }
 
-    // Mapa de reputación (score cacheado en NormalUser, prior si falta).
+    // Reputation map (cached score on NormalUser, prior if missing).
     const userIds = Array.from(
         new Set(
             candidates
@@ -235,8 +215,8 @@ export const computeMatchesForBond = async (
         return typeof v === 'number' ? v : MATCHING.reputation.prior;
     };
 
-    // Propiedades por bond (proximidad respecto al start; frescura).
-    // Online: la proximidad no aplica (intercambio global) → factor 1.
+    // Per-bond properties (proximity to start; freshness). Online: proximity does not apply
+    // (global exchange) -> factor 1.
     const startCoords = startRequest.location?.coordinates;
     const radiusKm: number | undefined = startRequest.radius;
     const proxOfNode = (node: any): number =>
@@ -251,13 +231,11 @@ export const computeMatchesForBond = async (
     const records: MatchRecord[] = [];
     const globalSeen = new Set<string>();
 
-    // ---- Pares (2 personas) ----
+    // ---- Pairs (2 people) ----
     for (const candidate of candidates) {
-        // Sin gate especial de 'empty': la validez la define el propio score. Las
-        // combinaciones inválidas (deseo concreto ← oferta vacía, y su simétrica)
-        // dan arista 0 vía `emptyEdgeScore` → `passesGate` las filtra. Así el
-        // "regalo" queda SIMÉTRICO por construcción (antes el gate era asimétrico y
-        // dejaba el match de un solo lado). Ver Matcheo-Comodines-Spec §4/§7.
+        // No special 'empty' gate: the score defines validity. Invalid combos (concrete want <-
+        // empty offer and its mirror) yield edge 0 via `emptyEdgeScore`, filtered by
+        // `passesGate`, so gifting is symmetric by construction (it was one-sided before).
         const s1 = directionalScoreF32(
             startRequest.want,
             startRequest._wantF32,
@@ -285,8 +263,8 @@ export const computeMatchesForBond = async (
             prox: proxOfNode(candidate),
             fresh: freshOfNode(candidate),
         };
-        // Modalidad como preferencia suave: si los formatos difieren, baja el
-        // score (sin excluir). Tolerante a modalidad ausente (factor 1).
+        // Modality as soft preference: differing formats lower the score (never exclude);
+        // missing modality is tolerated (factor 1).
         const score =
             finalMatchScore({
                 semQuality: parts.sem,
@@ -305,7 +283,7 @@ export const computeMatchesForBond = async (
         });
     }
 
-    // ---- Grafo para ciclos ----
+    // ---- Graph for cycles ----
     const requestMap = new Map<string, any>(
         candidates.map((c) => [c._id.toString(), c])
     );
@@ -327,8 +305,7 @@ export const computeMatchesForBond = async (
             }
         }
     }
-    // Beam: ordenar las aristas de cada nodo por score desc, para extender
-    // primero por los enlaces más fuertes (los ciclos de mayor puntaje).
+    // Beam: sort each node's edges by score desc so extension tries the strongest first.
     for (const list of edges.values()) list.sort((a, b) => b.score - a.score);
 
     const userOfBond = (id: string): string | undefined => {
@@ -365,12 +342,10 @@ export const computeMatchesForBond = async (
         if (path.length > maxCycleSize) return;
 
         const usersInPath = new Set(path.map(userOfBond));
-        // Aristas ya ordenadas por score desc.
         const neighbors = edges.get(currentId) || [];
 
-        // Cierre del ciclo: se evalúa sobre TODAS las aristas (el beam NO lo
-        // limita), para no perder ciclos válidos que cierran con una arista de
-        // menor score.
+        // Cycle closing is evaluated over ALL edges (the beam does NOT limit it), so valid
+        // cycles closing on a weaker edge are not lost.
         if (path.length >= 3) {
             const closing = neighbors.find((e) => e.to === startId);
             if (closing) {
@@ -379,16 +354,14 @@ export const computeMatchesForBond = async (
                     seenCycles.add(hash);
                     globalSeen.add(hash);
 
-                    // Calidad del ciclo: la MISMA mezcla que los pares (no el min
-                    // pelado), así los ciclos con varios matches buenos no quedan
-                    // aplastados por un solo eslabón flojo. `legacyRanking` vuelve
-                    // al min de siempre. (allEdges incluye el cierre del ciclo.)
+                    // Cycle quality: same blend as pairs (not crushed by one weak link;
+                    // `legacyRanking` reverts to bare min). allEdges includes the closing edge.
                     const allEdges = [...edgeScores, closing.score];
                     const sem = MATCHING.legacyRanking
                         ? Math.min(...allEdges)
                         : blendEdges(allEdges);
 
-                    // Participantes del ciclo, excluyendo mi propio bond de partida.
+                    // Cycle participants, excluding my own starting bond.
                     const participants = path.filter(
                         (id) => id !== bondRequestId
                     );
@@ -406,8 +379,7 @@ export const computeMatchesForBond = async (
                         prox: proxs.length ? Math.min(...proxs) : 1,
                         fresh: freshs.length ? Math.min(...freshs) : 1,
                     };
-                    // Penalización de modalidad del ciclo = el peor eslabón:
-                    // mínimo factor entre el bond de partida y cada participante.
+                    // Cycle modality penalty = worst link: min factor between start and participants.
                     const modFactor = participants.length
                         ? Math.min(
                               ...participants.map((id) =>
@@ -439,8 +411,7 @@ export const computeMatchesForBond = async (
             }
         }
 
-        // Extensión: solo las top-K aristas más fuertes (beam), evitando repetir
-        // bond o usuario. Acota la explosión conservando los ciclos de más puntaje.
+        // Extension: only the top-K strongest edges (beam); skip repeated bond or user.
         let explored = 0;
         for (const { to, score } of neighbors) {
             if (explored >= beamK || emitted >= cycleBudget) break;
@@ -454,12 +425,9 @@ export const computeMatchesForBond = async (
 
     dfs(bondRequestId, bondRequestId, [bondRequestId], []);
 
-    // Dedup por CONJUNTO de bonds (no por el orden del path del DFS): un ciclo
-    // A-B-C y su reverso A-C-B (o cualquier rotación) son el MISMO grupo de
-    // personas → debe quedar UN solo match, el de mayor score. El hash por path
-    // del DFS no canonicaliza dirección/rotación, así que dos orientaciones del
-    // mismo trío se emitían como dos records distintos. Acá se colapsan por el
-    // set ordenado de ids. (Los pares ya venían deduplicados por `globalSeen`.)
+    // Dedup by bond SET (not DFS path order): A-B-C and A-C-B (or any rotation) are the same
+    // group of people -> keep only the highest score. The DFS path hash does not canonicalize
+    // direction/rotation. (Pairs were already deduped by `globalSeen`.)
     const bestBySet = new Map<string, MatchRecord>();
     for (const r of records) {
         const key = [...r.ids].sort().join('|');
@@ -468,13 +436,12 @@ export const computeMatchesForBond = async (
     }
     const deduped = [...bestBySet.values()];
 
-    // Tope duro: nos quedamos con los N MEJORES por finalScore (los "100 mejores").
-    // Nunca se guardan/sirven más de esto por bond.
+    // Hard cap: keep only the N BEST by finalScore ("the 100 best"), never more per bond.
     deduped.sort((a, b) => b.score - a.score);
     const top = deduped.slice(0, MATCHING.maxResults);
 
-    // Orden de almacenamiento (el serving re-ordena igual). NUEVO: por score puro
-    // (el top-N ya se eligió por calidad). LEGACY: pares antes que ciclos.
+    // Storage order (serving re-sorts anyway). NEW: pure score (top-N already chosen by
+    // quality). LEGACY: pairs before cycles.
     top.sort((a, b) => {
         if (MATCHING.legacyRanking && a.size !== b.size) return a.size - b.size;
         return b.score - a.score;
@@ -483,7 +450,7 @@ export const computeMatchesForBond = async (
     return top;
 };
 
-/** Reemplaza en BondMatch los tratos precomputados para un bond de partida. */
+/** Replaces the precomputed deals in BondMatch for a starting bond. */
 export const persistMatches = async (
     sourceBondId: string,
     records: MatchRecord[]
@@ -500,9 +467,8 @@ export const persistMatches = async (
         computedAt: new Date(),
     }));
 
-    // Atómico donde haya soporte (Atlas replica set): el delete+insert va en una
-    // transacción, evitando la ventana en que el usuario vería 0 matches o
-    // duplicados si el worker y la petición corren a la vez.
+    // Atomic where supported (Atlas replica set): delete+insert in one transaction, so nobody
+    // sees 0 matches or duplicates when worker and request run concurrently.
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
@@ -510,7 +476,7 @@ export const persistMatches = async (
             if (docs.length) await BondMatch.insertMany(docs, { session });
         });
     } catch {
-        // Entorno sin transacciones (Mongo standalone): fallback secuencial.
+        // No transactions (Mongo standalone): sequential fallback.
         await BondMatch.deleteMany({ sourceBond });
         if (docs.length) await BondMatch.insertMany(docs);
     } finally {
@@ -518,7 +484,7 @@ export const persistMatches = async (
     }
 };
 
-/** Computa y cachea (lo invoca el robot; ya no se corre en la petición). */
+/** Computes and caches (invoked by the robot; no longer run per request). */
 export const computeAndCacheMatches = async (
     startRequest: any,
     userId: string
@@ -526,11 +492,9 @@ export const computeAndCacheMatches = async (
     const records = await computeMatchesForBond(startRequest, userId);
     await persistMatches(startRequest._id.toString(), records);
 
-    // Read model por participante (expand/contract). Best-effort durante el
-    // rollout: si falla, seguimos sirviendo desde BondMatch y se loguea. Cuando
-    // el feed es la fuente de lectura, el fallo SE PROPAGA: sin filas frescas el
-    // vínculo quedaría sirviendo datos viejos, así que el job debe reintentar y
-    // NO sellar la agenda.
+    // Per-participant read model (expand/contract). Best-effort during rollout: a failure falls
+    // back to BondMatch and gets logged. When the feed is the read source it PROPAGATES: stale
+    // rows must not be sealed, so the job retries.
     if (MATCHING.feedWrite) {
         try {
             const stats = await persistMatchFeed(
@@ -551,62 +515,30 @@ export const computeAndCacheMatches = async (
 
     const ahora = Date.now();
 
-    // ESCALA (TTL adaptativo): además de sellar CUÁNDO se computó, se agenda
-    // CUÁNDO toca la próxima vez, según la temperatura del vínculo. Ver
-    // matching.schedule.ts para la aritmética que esto resuelve.
-    //
-    // `createdAt` con red de seguridad: si el `select` del llamador no lo trajo,
-    // caer en `undefined` haría que TODO vínculo saliera 'frio' (24 h) y la caché
-    // se pondría rancia para todos, en silencio y sin ningún error. El `_id` de
-    // Mongo LLEVA ADENTRO su fecha de creación, así que `getTimestamp()` da la
-    // respuesta correcta siempre, venga o no el campo en la proyección.
+    // Adaptive TTL: seal WHEN it computed and schedule WHEN it is next due from the link's
+    // temperature (see matching.schedule.ts). `createdAt` falls back to the Mongo `_id`
+    // timestamp, else a missing select would make every link cold (24 h) and rot the cache.
     const creadoEn =
         (startRequest as any)?.createdAt ??
         (typeof (startRequest as any)?._id?.getTimestamp === 'function'
             ? (startRequest as any)._id.getTimestamp()
             : undefined);
 
-    // SELLADO CONDICIONAL POR GENERACIÓN (panel del 11/9).
-    //
-    // El filtro incluye `matchesGen`, la generación que leímos al EMPEZAR. Si
-    // durante el cómputo alguien invalidó este vínculo, `invalidateAndRefresh` la
-    // incrementó y este `updateOne` NO MATCHEA: no sellamos nada y el vínculo
-    // queda con la agenda vencida, así que el sweep lo retoma enseguida.
-    //
-    // Sin esta guarda había una carrera con consecuencias largas: el worker
-    // arranca a recomputar B a las 10:00; a las 10:00:03 se borra A, que
-    // participaba de sus matches → la invalidación borra la caché de B y lo
-    // encola, pero BullMQ DESCARTA ese encolado porque el jobId `rc-B` está
-    // ocupado por el job activo; a las 10:00:07 este cómputo termina con datos
-    // pre-evento y agenda B a 24 h vista. B se quedaba con caché rancia hasta
-    // mañana. Con el TTL uniforme el mismo agujero se cerraba solo en ≤60 min.
-    //
-    // Las filas de BondMatch ya se persistieron arriba y quedan (viejas) hasta el
-    // próximo cómputo. Es deliberado: el filtro fantasma del serving descarta los
-    // tratos cuyas contrapartes ya no están vivas, así que no se muestra nada
-    // imposible, y el vínculo está vencido para el sweep.
+    // Conditional seal by GENERATION: the filter carries `matchesGen` read at START. If the link
+    // was invalidated meanwhile, this update no longer matches, nothing is sealed and the sweep
+    // retakes it. Old BondMatch rows stay (serving's ghost filter hides dead counterparts).
     const genAlEmpezar = (startRequest as any)?.matchesGen ?? 0;
-    // ⚠️ EL `$in: [0, null]` NO ES DECORATIVO cuando la generación es 0.
-    //
-    // En Mongo, `{ matchesGen: 0 }` **no matchea un documento donde el campo está
-    // AUSENTE** — sólo `null` lo hace, y `$in: [..., null]` cubre null Y ausente.
-    // Sin esto, ningún vínculo anterior a este campo podía sellar nunca su
-    // cómputo: el sweep los retomaba en bucle y copaban el lote entero.
-    //
-    // `backfillAgendaMatcheo` siembra el campo, pero esta guarda igual hace falta:
-    // **la migración corre en la API y el sweep corre en el WORKER**, que son
-    // procesos distintos de PM2. Si el worker arranca y la API no (deploy parcial,
-    // API en bucle de reinicio), el sweep trabaja sobre un árbol sin migrar. La
-    // migración es la solución; esto es la red por si llega tarde.
+    // `$in: [0, null]` matters: `{ matchesGen: 0 }` does NOT match a doc where the field is
+    // absent; only `null` does, and `$in` covers null AND missing. Without it, pre-field links
+    // never seal and the sweep loops on them. Backfill runs in the API, the sweep in the WORKER.
     const filtroGen =
         genAlEmpezar === 0 ? { $in: [0, null] } : genAlEmpezar;
     const sellado = await BondRequest.updateOne(
         { _id: startRequest._id, matchesGen: filtroGen },
         {
             $set: {
-                // El serving lo usa para saber que YA se computó aunque `records`
-                // esté vacío (cero matches), y así el front deja de sondear en
-                // lugar de quedarse en "computing" para siempre.
+                // Serving reads this to know the compute ran even with zero `records`, so the
+                // front stops polling instead of staying "computing" forever.
                 matchesComputedAt: new Date(ahora),
                 matchesNextAt: proximoRecomputoEn({
                     ahora,
@@ -617,13 +549,9 @@ export const computeAndCacheMatches = async (
         }
     );
     if (!sellado.matchedCount) {
-        // El mensaje NO afirma la causa. Un `matchedCount` en cero puede ser una
-        // invalidación concurrente (lo esperado), pero también el documento
-        // borrado entre el cómputo y el sellado, o un campo que no está donde se
-        // lo espera. Una versión anterior decía "descartado por invalidación
-        // concurrente" a secas, y cuando la causa real fue otra —el campo ausente
-        // de todo el corpus— el único rastro del incidente apuntaba al lugar
-        // equivocado. Diagnosticar con un log que adivina cuesta horas.
+        // The message does NOT assert the cause. Zero `matchedCount` can be a concurrent
+        // invalidation (expected), a deleted document, or a field not where expected; a log
+        // that guesses costs hours of diagnosis.
         logger.warn(
             `[matching] el cómputo del vínculo ${startRequest._id} no se selló ` +
                 `(gen esperada ${genAlEmpezar}): invalidación concurrente, o el ` +

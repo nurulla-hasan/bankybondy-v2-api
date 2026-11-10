@@ -127,7 +127,7 @@ const moduleRoutes = [
         router: DonateRoutes,
     },
     {
-        // Botón de arrepentimiento y de baja (Disp. 954/2025). Público.
+        // Regret and cancellation buttons (Disp. 954/2025). Public.
         path: '/consumidor',
         router: consumidorRoutes,
     },

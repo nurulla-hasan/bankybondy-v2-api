@@ -1,8 +1,6 @@
-// Vocabulario controlado (estable) de "feeling tags" en espanol: lo que un audio
-// le hizo SENTIR al oyente. Se guardan los valores canonicos (con acentos) y esos
-// mismos son las etiquetas de display que expone la API. Internamente se usa un
-// "slug" (sin acentos, minusculas) solo para hacer el matching del input tolerante
-// a mayusculas/acentos, pero SIEMPRE se almacena/retorna el valor canonico.
+// Controlled Spanish "feeling tags" vocabulary: what an audio made the listener feel.
+// Canonical (accented) values are stored and returned; an accent-less slug only matches
+// input case/accent-insensitively.
 export const FEELING_TAGS = [
     'calma',
     'seguridad',
@@ -40,10 +38,10 @@ export const FEELING_TAGS = [
 
 export type FeelingTag = (typeof FEELING_TAGS)[number];
 
-// Rango Unicode de marcas diacriticas combinantes (U+0300 a U+036F).
+// Unicode range of combining diacritical marks (U+0300 to U+036F).
 const COMBINING_MARKS = new RegExp('[\\u0300-\\u036f]', 'g');
 
-// Normaliza a slug: quita acentos, recorta y pasa a minusculas.
+// Normalize to slug: strip accents, trim, lowercase.
 const slugify = (value: string): string =>
     value
         .normalize('NFD')
@@ -59,18 +57,18 @@ const SLUG_TO_CANONICAL: Record<string, string> = FEELING_TAGS.reduce(
     {} as Record<string, string>
 );
 
-// true si el valor (tolerante a mayusculas/acentos) pertenece al vocabulario.
+// True if the value (case/accent-insensitive) belongs to the vocabulary.
 export const isValidFeelingTag = (value: string): boolean =>
     typeof value === 'string' &&
     Object.prototype.hasOwnProperty.call(SLUG_TO_CANONICAL, slugify(value));
 
-// Devuelve el valor canonico (con acentos) o null si no pertenece al vocabulario.
+// Return the canonical (accented) value, or null if not in the vocabulary.
 export const toCanonicalFeelingTag = (value: string): string | null =>
     typeof value === 'string'
         ? SLUG_TO_CANONICAL[slugify(value)] ?? null
         : null;
 
-// Normaliza una lista: mapea a canonico, descarta invalidos y quita duplicados.
+// Normalize a list: map to canonical, drop invalid entries and dedupe.
 export const normalizeFeelingTags = (values: string[]): string[] => {
     const seen = new Set<string>();
     const result: string[] = [];

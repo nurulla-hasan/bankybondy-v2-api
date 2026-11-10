@@ -16,7 +16,6 @@ const createFeedBack = catchAsync(async (req, res) => {
     });
 });
 
-//
 const replyFeedback = catchAsync(async (req, res) => {
     const result = await feedbackService.replyFeedback(
         req?.params?.id,
@@ -39,7 +38,6 @@ const deleteFeedback = catchAsync(async (req, res) => {
     });
 });
 
-// get all feedback
 const getAllFeedback = catchAsync(async (req, res) => {
     const result = await feedbackService.getAllFeedback(req?.query);
     sendResponse(res, {

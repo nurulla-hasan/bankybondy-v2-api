@@ -21,19 +21,14 @@ const sendFriendRequest = async (sender: string, receiver: string) => {
             'Cannot send request to self'
         );
 
-    // Bloqueo: si hay bloqueo en CUALQUIER dirección, no se puede mandar solicitud.
-    // Corta la solicitud y su notificación (un bloqueado no debe poder pinguearte).
+    // Blocking in EITHER direction stops the request and its notification.
     const blocked = await getBlockedIdsFor(sender);
     if (blocked.includes(receiver)) {
         throw new AppError(httpStatus.FORBIDDEN, 'No se puede enviar la solicitud');
     }
 
-    // Validar que el receiver EXISTA y no esté bloqueado por un ADMIN. Antes solo
-    // se chequeaba existencia (`exists`), así que se podía mandar solicitud (y
-    // notificación) a una cuenta suspendida por moderación si se conocía su
-    // profileId. Personas y el perfil individual ya la tratan como inexistente;
-    // acá quedaba la puerta abierta. Se responde 404 igual, para no revelar que
-    // la cuenta existe.
+    // Receiver must exist and not be admin-blocked. Respond 404 either way so we
+    // don't reveal that a suspended account exists.
     const receiverAccount = await NormalUser.findById(receiver)
         .select('user')
         .populate({ path: 'user', select: 'isBlocked' })
@@ -42,8 +37,7 @@ const sendFriendRequest = async (sender: string, receiver: string) => {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
-    // Duplicado en CUALQUIER sentido y solo si sigue PENDIENTE: si ya hay A→B o
-    // B→A pendiente, no se crea otra (antes solo miraba el exacto A→B).
+    // Duplicate in ANY direction, and only while still Pending.
     const existing = await FriendRequest.findOne({
         status: ENUM_FRIEND_REQUEST_STATUS.Pending,
         $or: [
@@ -58,10 +52,8 @@ const sendFriendRequest = async (sender: string, receiver: string) => {
     try {
         created = await FriendRequest.create({ sender, receiver });
     } catch (err: any) {
-        // Carrera pura (doble-tap): el chequeo de arriba es check-then-create y
-        // tiene ventana TOCTOU. El índice único PARCIAL {sender,receiver} con
-        // status:Pending rechaza el 2do insert con E11000 → devolvemos el mismo
-        // mensaje que el chequeo de duplicado (no un 500).
+        // Pure race (double-tap): the partial unique index rejects the 2nd insert
+        // with E11000 -> return the same message as the duplicate check, not a 500.
         if (err?.code === 11000) {
             throw new AppError(
                 httpStatus.BAD_REQUEST,
@@ -71,7 +63,7 @@ const sendFriendRequest = async (sender: string, receiver: string) => {
         throw err;
     }
 
-    // Notificación (Fase 2): avisar al receptor de la solicitud. Best-effort.
+    // Notify the receiver of the request. Best-effort.
     sendNotification({
         title: 'Nueva solicitud de amistad',
         message: 'Alguien quiere sumarte como amistad.',
@@ -88,8 +80,8 @@ const acceptRejectRequest = async (
     status: ENUM_FRIEND_REQUEST_STATUS,
     receiver: string
 ) => {
-    // Atómico + autorización: solo el receptor puede aceptar/rechazar,
-    // y solo si sigue Pending (evita doble aceptación en carrera).
+    // Atomic + authorization: only the receiver, and only while still Pending
+    // (prevents double acceptance in a race).
     const request = await FriendRequest.findOneAndUpdate(
         {
             _id: requestId,
@@ -106,8 +98,7 @@ const acceptRejectRequest = async (
         );
     }
 
-    // Notificación (Fase 2): si se ACEPTÓ, avisar a quien había enviado la
-    // solicitud (request.sender). Best-effort, no bloquea la respuesta.
+    // If ACCEPTED, notify the original sender. Best-effort, never blocks the response.
     if (String(status) === ENUM_FRIEND_REQUEST_STATUS.Accepted) {
         sendNotification({
             title: 'Aceptaron tu solicitud',
@@ -126,9 +117,8 @@ const getMyFriends = async (userId: string, query: Record<string, any>) => {
     const limit = clampLimit(query.limit);
     const skip = (page - 1) * limit;
     const searchTerm = query.searchTerm || '';
-    // Bloqueo: excluir amistades donde la otra parte está bloqueada (cualquier
-    // dirección). Como cada doc tiene sender/receiver = yo + el otro, con excluir
-    // los bloqueados de ambos campos alcanza (yo nunca estoy en la lista).
+    // Exclude friendships where the other party is blocked (either direction).
+    // Each doc is me + the other, so filtering both fields suffices.
     const blockedIds = await getBlockedObjectIdsFor(userId);
     const matchStage: any = {
         $or: [
@@ -280,7 +270,7 @@ const getMyFollowers = async (userId: string, query: Record<string, any>) => {
     const skip = (page - 1) * limit;
     const searchTerm = query.searchTerm || '';
 
-    // Bloqueo: no mostrar solicitudes recibidas de usuarios bloqueados.
+    // Don't show incoming requests from blocked users.
     const blockedIds = await getBlockedObjectIdsFor(userId);
     const matchStage: any = {
         receiver: new mongoose.Types.ObjectId(userId),
@@ -368,7 +358,7 @@ const getMyFollowing = async (userId: string, query: Record<string, any>) => {
     const skip = (page - 1) * limit;
     const searchTerm = query.searchTerm || '';
 
-    // Bloqueo: no mostrar solicitudes enviadas hacia usuarios bloqueados.
+    // Don't show sent requests toward blocked users.
     const blockedIds = await getBlockedObjectIdsFor(userId);
     const matchStage: any = {
         sender: new mongoose.Types.ObjectId(userId),
@@ -480,7 +470,7 @@ const unfriend = async (userId: string, friendId: string) => {
 };
 
 const getPendingRequestCount = async (userId: string) => {
-    // Bloqueo: no contar solicitudes de usuarios bloqueados (badge fantasma).
+    // Don't count requests from blocked users (phantom badge).
     const blockedIds = await getBlockedObjectIdsFor(userId);
     const count = await FriendRequest.countDocuments({
         receiver: new mongoose.Types.ObjectId(userId),

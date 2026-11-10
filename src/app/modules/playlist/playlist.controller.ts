@@ -6,7 +6,6 @@ import sendResponse from '../../utilities/sendResponse';
 import PlaylistService from './playlist.service';
 import { USER_ROLE } from '../user/user.constant';
 
-// Create Playlist
 const createPlaylist = catchAsync(async (req, res) => {
     const file: any = req.files?.playlist_cover;
     if (req.files?.playlist_cover) {
@@ -24,7 +23,6 @@ const createPlaylist = catchAsync(async (req, res) => {
     });
 });
 
-// Get All Playlists
 const getAllPlaylists = catchAsync(async (req, res) => {
     const result = await PlaylistService.getAllPlaylists(
         req.query,
@@ -50,13 +48,11 @@ const getMyPlaylists = catchAsync(async (req, res) => {
     });
 });
 
-// Get Playlist by ID
 const getPlaylistById = catchAsync(async (req, res) => {
     const { playlistId } = req.params;
-    // Se pasa el viewer para aplicar el bloqueo entre usuarios (ocultar la playlist
-    // y los audios de dueños bloqueados). Un admin/superAdmin no tiene profileId de
-    // NormalUser, así que ahí viaja undefined y no se filtra por bloqueo (correcto:
-    // el admin no bloquea usuarios como par).
+// The viewer is passed so blocking is applied (hide the playlist and audios of
+// blocked owners). An admin/superAdmin has no NormalUser profileId, so it travels
+// as undefined and no block filter runs — correct, admins don't block peers.
     const result = await PlaylistService.getPlaylistById(
         playlistId,
         req.user.profileId
@@ -69,7 +65,6 @@ const getPlaylistById = catchAsync(async (req, res) => {
     });
 });
 
-// Update Playlist
 const updatePlaylist = catchAsync(async (req, res) => {
     const file: any = req.files?.playlist_cover;
     if (req.files?.playlist_cover) {
@@ -89,12 +84,10 @@ const updatePlaylist = catchAsync(async (req, res) => {
     });
 });
 
-// Delete Playlist
 const deletePlaylist = catchAsync(async (req, res) => {
     const { playlistId } = req.params;
-    // La ruta deja pasar admin/superAdmin además del dueño: un admin puede borrar
-    // cualquier playlist (moderación). Sin esto el service exigía dueño y el admin
-    // (sin profileId) recibía 404.
+    // The route lets admin/superAdmin through as well (moderation). Without this the
+    // service required ownership and the admin (no profileId) got a 404.
     const isAdmin =
         req.user.role === USER_ROLE.admin ||
         req.user.role === USER_ROLE.superAdmin;

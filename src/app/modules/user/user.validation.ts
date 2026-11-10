@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { ENUM_USER_STATUS } from '../../utilities/enum';
 
-// Zod schema for user creation
 export const registerUserValidationSchema = z.object({
   body: z.object({
     userData: z.object({
@@ -10,12 +9,8 @@ export const registerUserValidationSchema = z.object({
       email: z
         .string({ invalid_type_error: 'Please add a valid email' })
         .email('Invalid email format'),
-      // `skills` se acepta en el alta (el formulario de registro las hace
-      // elegir). Se valida el FORMATO acá porque en el modelo son ObjectId: sin
-      // esta guarda, un valor mal formado hacía fallar el casteo de mongoose y
-      // rompía el registro entero. Antes el campo se descartaba en silencio, así
-      // que el problema no existía; al empezar a guardarlo, hay que validarlo.
-      // Tope de 50 para que nadie mande un array gigante.
+      // Validated here because the model stores ObjectIds: a malformed value broke the
+      // mongoose cast and the whole signup. Capped to stop huge arrays.
       skills: z
         .array(z.string().regex(/^[a-f\d]{24}$/i, 'Invalid skill id'))
         .max(50, 'Too many skills')
@@ -40,20 +35,20 @@ const changePasswordValidationSchema = z.object({
   }),
 });
 
-// refresh token validation schema -----------
+// Refresh token
 const refreshTokenValidationSchema = z.object({
   cookies: z.object({
     refreshToken: z.string({ required_error: 'Refresh token is required' }),
   }),
 });
 
-// forget password validation schema
+// Forget password
 const forgetPasswordValidationSchema = z.object({
   body: z.object({
     email: z.string({ required_error: 'User email is required' }),
   }),
 });
-// reset password validation schema
+// Reset password
 const resetPasswordValidationSchema = z.object({
   body: z.object({
     email: z.string({ required_error: 'User email is required' }),

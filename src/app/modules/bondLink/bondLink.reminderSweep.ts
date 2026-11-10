@@ -1,11 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Sweep de RECORDATORIO de cierre de trueques (Tanda 2, rating en suspenso).
- *
- * Como la reputación se aplica SOLO cuando todos marcan completado (sin válvula de
- * liberación), un trueque viejo Ongoing con reseñas en suspenso queda trabado. Este
- * barrido nudgea UNA sola vez (flag reminderSentAt) a los participantes que NO
- * cerraron un trueque Ongoing más viejo que N días, para que lo cierren y se
- * apliquen las reseñas de todos. Corre en el proceso WORKER, no en la API.
+/* Trade-closure reminder sweep. Reputation only applies once everyone marks
+ * completed, so old Ongoing trades stay stuck. This nudges non-completers ONCE
+ * (reminderSentAt). Runs in the WORKER process, not the API.
  */
 import cron from 'node-cron';
 import { expresionCron } from '../../utilities/expresionCron';
@@ -19,18 +15,18 @@ import { recomputeReputation } from '../bondRating/reputation.util';
 
 const SWEEP_ENABLED =
     (process.env.TRADE_REMINDER_ENABLED ?? 'true').toLowerCase() === 'true';
-// Una vez por día (por defecto al mediodía).
+// Once per day (noon by default).
 const SWEEP_CRON = expresionCron('TRADE_REMINDER_CRON', '0 12 * * *');
-// Antigüedad (días) del trueque Ongoing antes de recordar.
+// Age (days) of an Ongoing trade before reminding.
 const REMINDER_DAYS = Number(process.env.TRADE_REMINDER_DAYS) || 5;
-// Lote por corrida (para no saturar).
+// Batch per run, to avoid saturating.
 const SWEEP_BATCH = Number(process.env.TRADE_REMINDER_BATCH) || 100;
 
-/** Nudgea a los que NO cerraron trueques Ongoing viejos. UNA vez por trueque
- *  (reminderSentAt). Devuelve cuántos trueques recordó. */
+/** Nudges non-completers of old Ongoing trades, once per trade (reminderSentAt).
+ *  Returns how many trades were reminded. */
 export const runReminderSweepOnce = async (): Promise<number> => {
     const cutoff = new Date(Date.now() - REMINDER_DAYS * 24 * 60 * 60 * 1000);
-    // `reminderSentAt: null` matchea tanto null como el campo AUSENTE (docs viejos).
+    // `reminderSentAt: null` also matches docs where the field is missing.
     const stale = await BondLink.find({
         status: ENUM_BOND_LINK_STATUS.Ongoing,
         createdAt: { $lt: cutoff },
@@ -42,8 +38,8 @@ export const runReminderSweepOnce = async (): Promise<number> => {
 
     let n = 0;
     for (const bl of stale as any[]) {
-        // Reclamo ATÓMICO primero: solo la corrida que gana el update (reminderSentAt
-        // aún null) manda los avisos → anti-doble-envío si dos corridas se solapan.
+        // Atomic claim first: only the winning run sends, avoiding double-send
+        // when two runs overlap.
         // eslint-disable-next-line no-await-in-loop
         const claimed = await BondLink.findOneAndUpdate(
             { _id: bl._id, reminderSentAt: null },
@@ -74,19 +70,16 @@ export const runReminderSweepOnce = async (): Promise<number> => {
     return n;
 };
 
-/** RED DE SEGURIDAD de durabilidad para el rating en suspenso. El batch-apply de
- *  markAsCompleteBond corre fuera de transacción: si el proceso muere entre la
- *  transición a Completed y el updateMany, las reseñas quedan `applied:false`
- *  sobre un trueque YA cerrado → subcontarían la reputación para siempre. Igual
- *  la race del upsert de addRating (leyó Ongoing justo antes del cierre) deja una
- *  reseña varada. Este barrido las promueve y recomputa. Devuelve cuántas aplicó. */
+/** Durability safety net for suspended ratings. markAsCompleteBond's batch-apply
+ *  runs outside a transaction, and addRating's upsert race can strand a rating.
+ *  This promotes them and recomputes. Returns how many it applied. */
 export const reconcileStrandedRatings = async (): Promise<number> => {
-    // BondLinks con alguna reseña aún en suspenso...
+    // Trades with at least one still-suspended rating...
     const strandedLinkIds = await BondRating.distinct('bondLink', {
         applied: { $ne: true },
     });
     if (!strandedLinkIds.length) return 0;
-    // ...pero que YA están Completed (los Ongoing quedan en suspenso, es correcto).
+    // ...that are already Completed (Ongoing ones correctly stay suspended).
     const completed = await BondLink.find({
         _id: { $in: strandedLinkIds },
         status: ENUM_BOND_LINK_STATUS.Completed,
@@ -119,8 +112,7 @@ export const reconcileStrandedRatings = async (): Promise<number> => {
 
 let scheduled = false;
 let running = false;
-/** Registra el cron del recordatorio + reconciliación (idempotente). Llamar al
- *  arrancar el worker. */
+/** Registers the reminder + reconciliation cron (idempotent). Call on worker start. */
 export const startCompletionReminderSweep = (): void => {
     if (!SWEEP_ENABLED) {
         logger.info(
@@ -131,17 +123,17 @@ export const startCompletionReminderSweep = (): void => {
     if (scheduled) return;
     scheduled = true;
     cron.schedule(SWEEP_CRON, async () => {
-        if (running) return; // la corrida anterior sigue: no solapar
+        if (running) return; // previous run still going: do not overlap
         running = true;
         try {
-            // 1) Red de seguridad: rescatar reseñas varadas de trueques ya cerrados.
+            // 1) Safety net: rescue stranded ratings of already closed trades.
             const applied = await reconcileStrandedRatings();
             if (applied) {
                 logger.info(
                     `[trueque] reconciliación: aplicadas ${applied} reseña(s) varada(s) de trueque(s) Completed.`
                 );
             }
-            // 2) Recordatorio a los que no cerraron trueques Ongoing viejos.
+            // 2) Remind those who did not close old Ongoing trades.
             const n = await runReminderSweepOnce();
             if (n) {
                 logger.info(

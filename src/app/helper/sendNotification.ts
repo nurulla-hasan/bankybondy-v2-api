@@ -4,15 +4,11 @@ import { getIO } from '../socket/socket';
 import getUserNotificationCount from './getUserNotificationCount';
 
 interface SendNotificationOptions {
-    // Colapsar por vínculo: en vez de crear una fila nueva, mantiene UNA sola
-    // notificación por (receiver + type + redirectId). Si ya existe, la refresca
-    // (texto), la sube al tope (createdAt) y la vuelve a NO-leída (seenBy=[]) y
-    // visible (deleteBy=[]). Se usa para las notificaciones de match: el robot ya
-    // no acumula una fila por cada pasada, sino que actualiza la del vínculo.
+    // Keep one notification per (receiver + type + redirectId), refreshing text,
+    // bumping createdAt and marking it unread/visible. Used by match notifications.
     collapseByRedirect?: boolean;
-    // Firmas de match nuevas a registrar en `notifiedSignatures` (solo colapso de
-    // MATCH). Se mergean con $addToSet: una reaparición de la MISMA firma ya no
-    // vuelve a resetear seenBy la próxima vez (anti-rebote del badge).
+    // New match signatures for `notifiedSignatures` (MATCH collapse only); prevents
+    // a reappearing signature from resetting seenBy again (badge anti-rebound).
     addSignatures?: string[];
 }
 
@@ -20,16 +16,14 @@ const sendNotification = async (
     notificationData: INotification,
     options?: SendNotificationOptions
 ) => {
-    // Camino COLAPSAR (match): upsert por (receiver, type, redirectId). Requiere
-    // redirectId; si faltara, cae al create normal para no colapsar de más.
+    // Collapse path (match): upsert by (receiver, type, redirectId). Falls back to
+    // a plain create when redirectId is missing.
     if (options?.collapseByRedirect && notificationData.redirectId) {
         const { receiver, type, redirectId } = notificationData;
         const filter = { receiver, type, redirectId };
         const now = new Date();
-        // timestamps:false → manejamos createdAt/updatedAt a mano (así podemos
-        // BUMPEAR createdAt al tope sin que Mongoose meta su propio updatedAt y
-        // choque con nuestro $set). createdAt nuevo = sube en el listado (ordena
-        // por createdAt desc); seenBy/deleteBy vacíos = no-leída y visible.
+        // timestamps:false so we control createdAt/updatedAt: bumping createdAt
+        // reorders the listing (desc) without Mongoose overriding our $set.
         const update: Record<string, unknown> = {
             $set: {
                 title: notificationData.title,
@@ -40,16 +34,12 @@ const sendNotification = async (
                 updatedAt: now,
             },
         };
-        // Registrar las firmas GENUINAMENTE nuevas por las que se avisa. El caller
-        // (notifyNewMatches) ya sólo llama cuando hay firmas nuevas, así que acá
-        // reseteamos seenBy (arriba) y acumulamos esas firmas para que una futura
-        // reaparición de la misma no vuelva a rebotar el badge.
+        // Record the genuinely new signatures being notified (caller only calls
+        // when there are new ones) so a later reappearance won't bounce the badge.
         const sigs = options?.addSignatures;
         if (sigs && sigs.length) {
-            // $push con $slice acota el array a las últimas N firmas (evita que un
-            // bond muy activo acumule miles de firmas y las relea enteras en cada
-            // recomputo). Las firmas ya vienen dedupeadas por el caller. Si una muy
-            // vieja cae del tope y reaparece, se re-avisa una vez (aceptable).
+            // $slice caps the array at the last N signatures so an active bond
+            // doesn't grow thousands; dropping an old one may re-notify once.
             update.$push = { notifiedSignatures: { $each: sigs, $slice: -300 } };
         }
         try {
@@ -59,9 +49,8 @@ const sendNotification = async (
                 timestamps: false,
             });
         } catch (err: unknown) {
-            // Índice único parcial (receiver, redirectId | type=MATCH): si dos
-            // pasadas del robot corren a la vez, la 2ª choca con 11000. La fila ya
-            // existe → aplicamos sólo el update (sin upsert). Idempotente.
+            // Partial unique index (receiver, redirectId | type=MATCH): concurrent
+            // robot runs collide with 11000; the row exists, so update without upsert.
             if ((err as { code?: number })?.code === 11000) {
                 await Notification.updateOne(filter, update, {
                     timestamps: false,
@@ -71,16 +60,12 @@ const sendNotification = async (
             }
         }
     } else {
-        // Persistimos SIEMPRE primero: la notificación NO debe perderse aunque el
-        // socket no esté disponible. Esto importa ahora que el cómputo de matcheo
-        // corre en un proceso worker dedicado que NO inicializa el `io` — antes,
-        // llamar a getIO() primero tiraba y se perdía hasta el registro en la base.
+        // Persist first so the notification survives when no socket exists: the
+        // matching worker process never initializes `io`.
         await Notification.create(notificationData);
     }
 
-    // Push en vivo: best-effort. Si no hay `io` (proceso worker) o falla el
-    // socket, la notificación ya quedó guardada y aparece en la próxima
-    // carga/poll del cliente. Nunca rompe el flujo que la disparó.
+    // Live push is best-effort; failures must never break the caller.
     try {
         const io = getIO();
         const updatedNotification = await getUserNotificationCount(
@@ -91,7 +76,7 @@ const sendNotification = async (
             updatedNotification
         );
     } catch {
-        /* sin socket en este proceso: notificación ya persistida */
+        /* no socket in this process: notification already persisted */
     }
 };
 

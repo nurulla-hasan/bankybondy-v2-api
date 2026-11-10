@@ -1,10 +1,7 @@
 import { z } from 'zod';
 
-// Cotas de monto de donación (anti-abuso: micro-donaciones que solo generan
-// ruido/costo de checkout, y montos absurdos por error de tipeo). Env-overridable;
-// el máximo por defecto es GENEROSO para no cortar donaciones legítimas. OJO: el
-// `amount` de /donate está SIEMPRE en USD (PayPal cobra en USD y la vía MP hace
-// usdToPesos(amount)), así que estas cotas son en USD, no en pesos.
+// Donation amount bounds (anti-abuse), env-overridable. Always in USD: PayPal
+// charges in USD and the MP path converts via usdToPesos.
 const DONATION_MIN_AMOUNT = Number(process.env.DONATION_MIN_AMOUNT || 1);
 const DONATION_MAX_AMOUNT = Number(process.env.DONATION_MAX_AMOUNT || 1_000_000);
 

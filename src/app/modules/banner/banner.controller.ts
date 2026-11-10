@@ -44,7 +44,6 @@ const updateBanner = catchAsync(async (req, res) => {
     });
 });
 
-// delete banner
 const deleteBanner = catchAsync(async (req, res) => {
     const { id } = req.params;
     const result = await bannerServices.deleteBanner(id);

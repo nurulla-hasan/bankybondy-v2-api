@@ -25,9 +25,8 @@ import {
     isSurpriseToken,
 } from '../bondRequest/matching.colors';
 
-// Copias por momento (Fase 3, Tanda B). El texto viaja guardado en la
-// notificación (mismo patrón que el resto). La clave coincide con el tipo del
-// enum para mapear 1:1. El front pinta ícono/color por tipo.
+// Per-moment copy. Text is stored in the notification itself; keys map 1:1 to
+// the enum type (front renders icon/color per type).
 const PROPOSAL_COPY = {
     ENCOUNTER: {
         title: 'Alguien quiere encontrarse',
@@ -52,15 +51,9 @@ const PROPOSAL_COPY = {
 } as const;
 
 /**
- * Clasifica el momento de UN participante en el ciclo propuesto, con la MISMA
- * regla que matching.colors.ts (per-entry, asimétrica):
- *  - su oferta Y su deseo vacíos            → ENCUENTRO (doble vacío).
- *  - su oferta vacía (da nada, recibe algo) → REGALO RECIBIDO.
- *  - su deseo vacío (da algo, recibe nada)  → REGALO DADO.
- *  - doble sorpresa en cualquiera de sus dos lados (su token y el del par,
- *    ambos 'surprise') → DOBLE SORPRESA. El deseo lo satisface la oferta del
- *    SIGUIENTE; su oferta satisface el deseo del ANTERIOR (ciclo).
- *  - si no → trueque normal.
+ * Classifies one participant's moment in the proposed cycle with the same
+ * per-entry, asymmetric rule as matching.colors.ts (empty offer+want, empty
+ * offer, empty want, surprise pair, else normal trade).
  */
 const classifyProposalMoment = (
     cycle: Array<{ offer?: string; want?: string }>,
@@ -89,10 +82,8 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
         throw new Error('At least two participant is required.');
     }
 
-    // Anti-IDOR: quien crea el vínculo DEBE ser uno de los participantes. Antes
-    // el body definía libremente la lista, así que un usuario podía armar un
-    // vínculo (y su conversación) metiendo a terceros sin estar él. El flujo
-    // legítimo de "Proponer" siempre incluye al proponente, así que no lo rompe.
+    // Anti-IDOR: the caller MUST be a participant. The body used to define the
+    // list freely, so one could link (and chat with) third parties uninvited.
     const isCallerParticipant = participants.some(
         (p: any) => p?.toString() === callerProfileId?.toString()
     );
@@ -103,20 +94,13 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
         );
     }
 
-    // Bloqueo (invariante "bloqueo total", consistente con chatGroup.create y el
-    // chat 1-a-1): un vínculo crea una conversación grupal entre los participantes.
-    // Sin este guard, un usuario bloqueado (en cualquier sentido) podía armar el
-    // vínculo + chat con IDs de bonos activos y contactar a quien lo bloqueó. Se
-    // rechaza si el caller tiene relación de bloqueo con ALGÚN participante.
-    // Se valida TODO PAR de participantes, no sólo el caller contra el resto.
-    // Antes se miraba únicamente `caller vs participantes`: en un vínculo de tres
-    // (A lo crea con B y C), si B tenía bloqueado a C el bloqueo se ignoraba y los
-    // dos terminaban en la misma conversación grupal. El bloqueo tiene que valer
-    // entre cualquier par, igual que en el 1-a-1.
+    // Block invariant: check EVERY participant pair, not just caller vs rest.
+    // With only the caller check, a trio where B blocked C still got a shared
+    // group chat; the block must hold between any pair, as in 1-to-1 chat.
     const blockedPair = await findBlockedPairAmong(participants);
     if (blockedPair) {
-        // El mensaje NO dice quién bloqueó a quién: revelarlo le confirmaría al
-        // caller un bloqueo entre terceros que no le incumbe.
+        // Message never says who blocked whom: that would confirm a block
+        // between third parties to the caller.
         const involucraAlCaller =
             blockedPair.blocker === callerProfileId?.toString() ||
             blockedPair.blocked === callerProfileId?.toString();
@@ -132,14 +116,9 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
         ? payload.requestedBonds
         : [];
 
-    // Anti-forja (M1): un vínculo se forma con BONOS reales. Sin validar
-    // `requestedBonds`, un usuario podía crear un BondLink + conversación grupal
-    // metiendo IDs de terceros ARBITRARIOS (con solo incluirse él en participants)
-    // y spamearlos con notificaciones, y adjuntar bonos ajenos/inexistentes. Se
-    // exige: (1) que haya bonos; (2) que existan y estén ACTIVOS; (3) que el
-    // conjunto de sus DUEÑOS sea EXACTAMENTE los participantes; (4) que el caller
-    // sea dueño de al menos uno. Así los participantes quedan atados a bonos reales
-    // y no a IDs sueltos. (El guard de "caller ∈ participants" ya está arriba.)
+    // Anti-forge (M1): bonds must exist, be ACTIVE, their owners must be EXACTLY
+    // the participants, and the caller must own one. Otherwise arbitrary ids let
+    // anyone spam strangers and attach foreign/nonexistent bonds.
     const uniqueRequestedBonds = Array.from(
         new Set(requestedBonds.map((b: any) => b.toString()))
     );
@@ -189,10 +168,8 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
             'Los participantes deben ser exactamente los dueños de los vínculos.'
         );
     }
-    // Cardinalidad 1-a-1: exactamente un vínculo por participante (ciclo bien
-    // formado). `sameOwners` valida el CONJUNTO de dueños pero permitía 2 bonos del
-    // mismo user + 1 de otro (mismo set, distinta cantidad) → ciclo deforme. Exigir
-    // la misma cantidad cierra ese hueco (y de paso rechaza bonos duplicados).
+    // 1:1 cardinality: exactly one bond per participant. `sameOwners` only checked
+    // the owner SET, so two bonds of one user + one of another still passed.
     if (payload.requestedBonds?.length !== participants.length) {
         throw new AppError(
             httpStatus.BAD_REQUEST,
@@ -206,10 +183,9 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
         );
     }
 
-    // R2-6 — Llave de idempotencia: ids de bonos ORDENADOS y UNICOS unidos por
-    // '_'. Determinista (mismo conjunto → misma llave, sin importar el orden que
-    // mande el front). El indice unico parcial {bondsKey, status:Ongoing} usa esto
-    // para que un doble-submit no cree DOS vinculos activos con los mismos bonos.
+    // R2-6 idempotency key: sorted unique bond ids joined by '_' (order
+    // independent). The partial unique index {bondsKey, status:Ongoing} uses it
+    // so a double submit cannot create two active links with the same bonds.
     const bondsKey = [...uniqueRequestedBonds].sort().join('_');
 
     let createdBondLinkDoc: any;
@@ -219,27 +195,23 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
             startSession: () => mongoose.startSession(),
         }).createLink(payload, callerProfileId);
 
-        // Tras el link, refrescamos las cachés de los vínculos involucrados. NO se
-        // desactivan (siguen en el pool); solo se recalculan para quedar al día.
+        // Refresh the involved bonds' caches after linking. They are NOT
+        // deactivated (still in the pool), just recomputed.
         for (const bondId of requestedBonds) {
-            // active=true: el vínculo sigue VIVO en el pool tras el link, así
-            // que se recomputa (no solo se refrescan afectados).
+            // active=true: the link stays alive in the pool after linking.
             invalidateAndRefresh(bondId.toString(), true).catch(
                 () => undefined
             );
         }
 
-        // Notificación (Fase 2 + 3): avisar a los DEMÁS participantes. Ahora con
-        // los MOMENTOS ESPECIALES por participante (regalo/doble sorpresa/doble
-        // vacío), clasificados con la misma regla que matching.colors.ts.
-        // Desacoplado (fire-and-forget): corre DESPUÉS del return, así no demora
-        // ni rompe la creación del vínculo pase lo que pase.
+        // Notify the OTHER participants with their per-participant moment,
+        // classified by the same rule as matching.colors.ts. Fire-and-forget:
+        // runs after return, so it never delays nor breaks the creation.
         const linkId = createdBondLinkDoc?._id?.toString();
         void (async () => {
             try {
-                // Reconstruimos el ciclo en el ORDEN de requestedBonds (que es el
-                // orden del ciclo que armó el front). Cada vínculo trae user +
-                // offer/want (los tokens 'empty'/'surprise' viven ahí).
+                // Rebuild the cycle in requestedBonds order (the front's ring
+                // order); each bond carries user + offer/want tokens.
                 const bonds: any[] = await BondRequest.find({
                     _id: { $in: requestedBonds },
                 })
@@ -280,9 +252,8 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
                     });
                 }
 
-                // Fallback: si no se pudo reconstruir el ciclo (datos raros),
-                // igual avisamos a los demás con el trueque normal. Nunca se
-                // queda alguien sin su notificación.
+                // Fallback: if the cycle could not be rebuilt (odd data), still
+                // notify the others with the normal trade copy.
                 if (notified.size === 0) {
                     const copy = PROPOSAL_COPY.TRADE_PROPOSED;
                     participants
@@ -301,7 +272,7 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
                         });
                 }
             } catch {
-                // best-effort: cualquier error acá jamás afecta el vínculo ya creado.
+                // best-effort: errors here never affect the created link.
             }
         })();
 
@@ -309,10 +280,9 @@ const createBondLink = async (payload: IBondLink, callerProfileId: string) => {
             ? createdBondLinkDoc.toObject()
             : createdBondLinkDoc;
     } catch (err: any) {
-        // R2-6 — Doble-submit: el indice unico parcial rechaza el 2do insert con
-        // E11000. En vez de un 500, respondemos IDEMPOTENTE: devolvemos el vinculo
-        // activo que ya existe (el 1er request gano la carrera y ya notifico, asi
-        // que aca NO se re-notifica). Si no aparece (caso raro), 409 limpio.
+        // R2-6 double submit: the partial unique index rejects the 2nd insert
+        // with E11000. Respond idempotently with the existing active link (the
+        // 1st request won the race and already notified, so no re-notify).
         const isDup =
             err?.code === 11000 ||
             err?.cause?.code === 11000 ||
@@ -338,14 +308,9 @@ const getMyBondLinks = async (
     userId: string,
     query: Record<string, unknown>
 ) => {
-    // Estado (Ongoing / Completed / Canceled): el front lo manda como ?status=,
-    // pero QueryBuilder lo descarta A PROPÓSITO — `status` está en
-    // BLOCKED_FILTER_FIELDS para evitar que un cliente fuerce el estado. El
-    // efecto colateral era que las pestañas "En curso" y "Completados" recibían
-    // exactamente la misma lista. Se resuelve acá: se lee el valor pedido, se
-    // valida contra el enum y se fija en el find BASE. Así el cliente elige
-    // entre estados conocidos y nunca puede inyectar un filtro arbitrario, que
-    // es justamente lo que protege la lista negra.
+    // ?status is dropped on purpose by QueryBuilder (BLOCKED_FILTER_FIELDS), so
+    // both tabs got the same list. Validate it against the enum and apply it in
+    // the base find: known states only, no arbitrary filter injection.
     const requestedStatus = String(query.status ?? '');
     const statusFilter = Object.values(ENUM_BOND_LINK_STATUS).includes(
         requestedStatus
@@ -356,10 +321,8 @@ const getMyBondLinks = async (
     const resultQuery = new QueryBuilder(
         BondLink.find({ participants: userId, ...statusFilter }).populate({
             path: 'requestedBonds',
-            // Excluye las COORDENADAS GPS exactas (PII) y los vectores ML (bloat)
-            // del BondRequest. El resto (offer/want/description/etc.) lo usa
-            // MatchGroup en las listas En curso/Completados; sólo `location` y los
-            // vectores eran de más y filtraban la ubicación de los co-participantes.
+            // Exclude exact GPS coords (PII) and ML vectors (bloat); the rest is
+            // used by MatchGroup. location leaked co-participants' position.
             select: '-location -offerVector -wantVector',
             populate: { path: 'user', select: 'name profile_image' },
         }),
@@ -384,14 +347,11 @@ const getSingleBondLink = async (profileId: string, id: string) => {
         participants: new mongoose.Types.ObjectId(profileId),
         _id: id,
     }).populate({
-        // Ciclo del intercambio (para el "círculo del intercambio" del chat): cada
-        // bono con su dueño + offer/want, en el orden del anillo. Mismo populate que
-        // getMyBondLinks — antes el single devolvía sólo IDs y el front no podía
-        // dibujar quién ofrece/pide qué.
+        // Exchange cycle for the chat's ring view: each bond with owner +
+        // offer/want in ring order (the single endpoint used to return ids only).
         path: 'requestedBonds',
-        // SÓLO lo que el círculo necesita. SIN este select, el populate traía el
-        // BondRequest COMPLETO — incluidas las COORDENADAS GPS exactas de todos los
-        // co-participantes (fuga de PII a cualquiera del trueque).
+        // Only what the ring needs; without this select the full BondRequest
+        // (including exact GPS of every co-participant) leaked.
         select: 'user offer want',
         populate: { path: 'user', select: 'name profile_image' },
     });
@@ -401,8 +361,8 @@ const getSingleBondLink = async (profileId: string, id: string) => {
     }
 
     let isMarkAsCompletedByYou = false;
-    // .includes() sobre ObjectId compara por REFERENCIA (nunca matchea un
-    // ObjectId recién creado) → siempre daba false. Comparo por string.
+    // .includes() on ObjectId compares by REFERENCE (never matches a fresh id),
+    // so it always returned false. Compare as strings.
     if (
         (bondLink.markAsCompletedBy ?? []).some(
             (x: any) => x?.toString() === profileId.toString()
@@ -411,18 +371,10 @@ const getSingleBondLink = async (profileId: string, id: string) => {
         isMarkAsCompletedByYou = true;
     }
 
-    // ¿A quién le falta que califiques? Sin este dato el front NO tenía forma de
-    // ofrecer la calificación más tarde: el modal se abría UNA sola vez, justo
-    // después de marcar el trueque como completado. Si el vínculo se completaba
-    // cuando vos no estabas (lo cerró el otro participante), no volvías a ver el
-    // modal NUNCA y te quedabas sin poder dar reputación.
-    //
-    // Se devuelve la lista de participantes (distintos de vos) que todavía no
-    // calificaste. El front la usa para mostrar el botón de calificar mientras
-    // quede alguien pendiente. Sólo tiene sentido en un vínculo completado.
-    // Se calcula desde que VOS marcaste completado (no desde que el vínculo entero
-    // lo está): así podés calificar a tu tiempo, sin esperar a que los demás
-    // cierren su parte. Mismo criterio que el guard de addRating.
+    // Participants (besides you) you have not rated yet. Without it the front
+    // could only offer rating once, right after completing: a link the other
+    // side closed while you were away left you unable to rate. Counted from when
+    // YOU marked it complete (same rule as addRating's guard), not from closing.
     let pendingRatingFor: string[] = [];
     if (isMarkAsCompletedByYou) {
         const yaCalificados = await BondRating.find({

@@ -26,7 +26,7 @@ const deleteMessage = catchAsync(async (req, res) => {
         req.params.id,
         req.user.profileId
     );
-    // Avisar a los demás participantes (best-effort, nunca rompe la respuesta).
+    // Notify the other participants (best-effort, never breaks the response).
     await notifyMessageDeletion(getSafeIO(), result, req.user.profileId);
     sendResponse(res, {
         statusCode: httpStatus.OK,
@@ -48,9 +48,8 @@ const getUnreadCount = catchAsync(async (req, res) => {
     });
 });
 
-// El gemelo HTTP del evento `seen` del socket: mismo `markSeen`, mismas guardas.
-// Sin esto, marcar como leído dependía de tener una conexión viva — y tras un
-// corte el badge no se bajaba aunque el usuario hubiera leído todo.
+// HTTP twin of the socket `seen` event: same `markSeen`, same guards. Without it,
+// marking as read required a live connection and badges stayed up after a drop.
 const markSeenMessages = catchAsync(async (req, res) => {
     const result = await markSeen({
         conversationId: req.body?.conversationId,
@@ -71,9 +70,8 @@ const markSeenMessages = catchAsync(async (req, res) => {
     });
 });
 
-// El gemelo HTTP de la rama 1-a-1 del socket: mismo núcleo, mismos guardas, misma
-// escritura y mismos eventos. Hace falta porque sin conexión viva (socket caído,
-// app en segundo plano) no había ninguna forma de mandar un mensaje.
+// HTTP twin of the socket 1-to-1 branch: same core, guards, write and events.
+// Needed because with no live connection there was no way to send a message.
 const sendMessage = catchAsync(async (req, res) => {
     const result = await createOneToOneMessage({
         currentUserId: req.user.profileId,

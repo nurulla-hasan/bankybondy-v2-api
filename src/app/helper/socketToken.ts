@@ -1,30 +1,18 @@
-/* Token de handshake para Socket.IO (B0).
+/* Socket.IO handshake token.
+ * The browser cannot read the HttpOnly access-token cookie, so /auth/socket-token
+ * mints this 30-minute JWT for the handshake only. `middlewares/auth.ts` rejects
+ * the `scope:'socket'` claim, so it cannot open the HTTP API.
  *
- * POR QUÉ EXISTE: el browser ya no puede leer el access token (vive en una cookie
- * HttpOnly), y `socket.ts` exige un JWT firmado en `handshake.auth.token`. Sin
- * esto, un front que use cookies (bankybondy-v2) simplemente no puede abrir un
- * socket. El endpoint `/auth/socket-token` toma la cookie y mintea ESTE token.
- *
- * POR QUÉ ES ACEPTABLE SACAR UN JWT AL JS: es de 30 minutos, y a diferencia del
- * access token no sirve para la API HTTP — `middlewares/auth.ts` rechaza
- * explícitamente la claim `scope:'socket'`. Queda útil para una sola cosa: el
- * handshake del chat. Y el socket sigue haciendo las mismas comprobaciones de
- * siempre (firma + estado del usuario en la DB: borrado, bloqueado, sin
- * verificar, contraseña cambiada), así que revocar una cuenta corta el socket en
- * la próxima conexión, no dentro de 30 días.
- *
- * `socket.ts` NO se toca: sólo lee `decode.id`, y acá va el mismo `id` (el `_id`
- * de User, no el profileId) que firman los seis puntos habituales.
- *
- * Función PURA (sin jsonwebtoken ni config) → testeable en runTests.ts.
+ * `socket.ts` only reads `decode.id`, which is User._id (not profileId).
+ * Pure module (no jsonwebtoken/config) → testable in runTests.ts.
  */
 
 export const SOCKET_TOKEN_SCOPE = 'socket';
 
-/** TTL en segundos; va en la respuesta para que el cliente refresque antes. */
+/** TTL in seconds; returned to clients so they refresh in time. */
 export const SOCKET_TOKEN_TTL_SECONDS = 30 * 60;
 
-/** Lo que entiende `jsonwebtoken` para el `exp`. Debe seguir a TTL_SECONDS. */
+/** jwt `exp` value; must match TTL_SECONDS. */
 export const SOCKET_TOKEN_EXPIRES_IN = '30m';
 
 export type SocketTokenClaims = {
@@ -41,19 +29,13 @@ type SessionUser = {
     email?: unknown;
     role?: unknown;
     scope?: unknown;
-    // Index signature: `req.user` es un `JwtPayload` (cualquier claim puede
-    // venir adentro), y sin esta línea TS no lo deja pasar.
+    // Index signature: `req.user` is a JwtPayload with arbitrary claims.
     [key: string]: unknown;
 } | null | undefined;
 
 /**
- * Claims del token de socket, o `null` si la sesión no es minteable.
- *
- * El `id` es el `_id` de User (el socket lo usa para `User.findById`), y el
- * `profileId`/`role` van frescos desde `req.user` — que el middleware ya rellena
- * con la DB, no con el token viejo. Nunca se inventa un rol: si el token de
- * sesión trajera un `role` distinto al de la DB, acá va el de `req.user`, y el
- * socket de todos modos vuelve a leer la DB al conectar.
+ * Socket token claims, or `null` if the session cannot be minted.
+ * `id` is User._id; profileId/role come fresh from `req.user` (DB-backed).
  */
 export const buildSocketTokenClaims = (
     user: SessionUser

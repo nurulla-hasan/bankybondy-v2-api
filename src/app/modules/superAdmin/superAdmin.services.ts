@@ -17,8 +17,8 @@ const updateSuperAdminProfile = async (
     if (!user) {
         throw new AppError(httpStatus.NOT_FOUND, 'Profile not found');
     }
-    // Defensa en profundidad, igual que en admin.services: solo campos editables,
-    // para que un payload con `user`/`isDeleted`/`_id` no escriba lo que quiera.
+    // Defense in depth, as in admin.services: only editable fields, so a payload
+    // with `user`/`isDeleted`/`_id` cannot write whatever it wants.
     const safePayload: Partial<ISuperAdmin> = {};
     for (const key of ['name', 'profile_image', 'contact', 'address'] as const) {
         if (payload[key] !== undefined) safePayload[key] = payload[key];

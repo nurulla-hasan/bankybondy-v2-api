@@ -1,15 +1,15 @@
 import { Response } from 'express';
 import config from '../../config';
 
-// Nombres únicos de las cookies de autenticación (HttpOnly).
-// El browser NUNCA las ve desde JS (mitiga robo de sesión por XSS).
+// HttpOnly auth cookie names: the browser never exposes them to JS (mitigates
+// session theft via XSS).
 export const ACCESS_COOKIE_NAME = 'accessToken';
 export const REFRESH_COOKIE_NAME = 'refreshToken';
 
-// 1 año para refresh cookie. La expiración REAL la valida el JWT.
+// 1 year for the refresh cookie; the JWT enforces the real expiry.
 const REFRESH_COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 365;
 
-// 30 días default para access cookie (o acorde a JWT_ACCESS_EXPIRES_IN).
+// 30 days for the access cookie; the JWT expiry is authoritative.
 const ACCESS_COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 
 const isProd = config.NODE_ENV === 'production';

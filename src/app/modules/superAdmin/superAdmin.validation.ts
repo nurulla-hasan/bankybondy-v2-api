@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-// Fix: faltaba el wrapper `body:`, así que validateRequest (que parsea
-// { body, cookies }) nunca validaba los campos reales → schema no-op.
+// The `body:` wrapper was missing, so validateRequest (which parses { body, cookies })
+// never validated the real fields and the schema was a no-op.
 export const updateSuperAdminSchema = z.object({
     body: z.object({
         name: z.string().optional(),

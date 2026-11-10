@@ -1,18 +1,5 @@
-/* Corre las pruebas puras del proyecto (sin base de datos ni red).
- *
- * Existe porque `matching.scoring.test.ts` tenía ~40 aserciones sobre el corazón
- * del matcheo pero NADIE las ejecutaba: el `npm test` del package.json era
- * `echo "Error: no test specified" && exit 1`, y el archivo sólo EXPORTA una
- * función (no se auto-ejecuta al importarlo). Estaban escritas y desconectadas.
- *
- * No usa vitest/jest a propósito: no hace falta agregar una dependencia para
- * correr funciones puras, y así el script viaja en el mismo .tgz que el resto
- * del código (package.json no viaja en los paquetes de deploy).
- *
- * Uso, ya compilado:
- *   node dist/scripts/runTests.js
- * Sale con código 1 si algo falla, así que sirve para encadenar en un script.
- */
+/* Runs the project's pure test suites (no DB, no network) and exits 1 on failure,
+ * so it can be chained in scripts. No vitest/jest on purpose: no new dependency. */
 import { runMatchingScoreTests } from '../app/modules/bondRequest/matching.scoring.test';
 import { runPublicShapeTests } from '../app/modules/bondRequest/bondRequest.publicShape.test';
 import { runAttachmentUrlTests } from '../app/helper/attachmentUrl.test';

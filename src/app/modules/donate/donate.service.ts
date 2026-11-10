@@ -12,13 +12,12 @@ import { Donate } from './donate.model';
 const donate = async (userId: string, amount: number, provider?: string) => {
     const result = await Donate.create({ user: userId, amount: amount });
 
-    // Ruta MercadoPago (paralela a PayPal). La donación queda Unpaid hasta que
-    // el webhook la confirme; devolvemos la URL de Checkout Pro.
+    // MercadoPago path (parallel to PayPal): the donation stays Unpaid until the
+    // webhook confirms it; return the Checkout Pro URL.
     if (provider === 'mercadopago') {
         return createDonationPreference(result._id.toString(), amount);
     }
-    // (Stripe desmontado: nunca se usó en producción. Las donaciones van por
-    // PayPal —abajo— o MercadoPago —arriba—.)
+    // Stripe was removed: never used in production.
 
     const totalAmount = amount;
 
@@ -46,8 +45,7 @@ const donate = async (userId: string, amount: number, provider?: string) => {
             //     cancel_url: `${config.paypal.donation_cancel_url}`,
             // },
             application_context: {
-                // Lo que PayPal le muestra a quien dona. Decía "Your Business
-                // Name" (texto de ejemplo); en suscripciones ya estaba corregido.
+                // Shown by PayPal to the donor. Was the sample "Your Business Name".
                 brand_name: 'Bankybondy',
                 landing_page: 'BILLING', // allows credit/debit card without login
                 user_action: 'PAY_NOW',

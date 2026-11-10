@@ -21,9 +21,9 @@ import {
 const getConversation = async (
     profileId: string,
     query: Record<string, unknown>,
-    // El listado normal omite lo que ESTE usuario oculto. La pantalla "chats
-    // ocultos" es la misma lista con el filtro invertido: así las dos comparten
-    // pipeline y no pueden divergir en forma ni en reglas de bloqueo.
+    // The normal list omits what THIS user hid; the "hidden chats" screen is the
+    // same list with the filter inverted, so both share the pipeline and can't
+    // diverge in shape or blocking rules.
     hidden = false
 ) => {
     const filters = pick(query, ['searchTerm', 'email', 'name']);
@@ -43,11 +43,9 @@ const getConversation = async (
         sortBy,
         sortOrder,
     } = calculatePagination(paginationOptions);
-    // R3 (Tanda 0): cap del limit del listado de chats (anti-DoS). Se capa a 500,
-    // no a 100: el front trae TODA la lista en una tira sin paginar (CHAT_LIST_LIMIT
-    // = 500 en useConversationsList); 100 rompería el sidebar de usuarios con >100
-    // chats. 500 frena el DoS (limit=999999) sin regresión. El skip se recalcula
-    // con el limit capado para que la paginación quede coherente.
+    // R3: chat-list limit cap (anti-DoS). 500, not 100: the front loads the whole
+    // list unpaginated (CHAT_LIST_LIMIT = 500), so 100 would break the sidebar of
+    // users with >100 chats. Skip uses the capped limit to keep pagination coherent.
     const limit = Math.min(Number(rawLimit) || 10, 500);
     const skip = ((Number(page) || 1) - 1) * limit;
     const sortConditions: { [key: string]: 1 | -1 } = {};
@@ -55,9 +53,8 @@ const getConversation = async (
         sortConditions[sortBy] = sortOrder === 'asc' ? 1 : -1;
     }
 
-    // Bloqueo (B.4): ids que el usuario bloqueo + que lo bloquearon. Se usan
-    // para ocultar de la lista las conversaciones 1-a-1 con esos usuarios.
-    // No se borran datos: solo se filtra la salida.
+    // Blocking (B.4): ids the user blocked + those that blocked them, used to hide
+    // 1-to-1 conversations with those users. No data deleted, only output filtered.
     const blockedObjectIds = await getBlockedObjectIdsFor(profileId);
 
     const searchConditions = [];
@@ -76,9 +73,8 @@ const getConversation = async (
         {
             $match: {
                 participants: new Types.ObjectId(profileId),
-                // B.7 (Tanda 2): excluir del listado las conversaciones que ESTE
-                // usuario oculto (soft-hide). No afecta al otro participante.
-                // `hidden` invierte el filtro para la pantalla de chats ocultos.
+                // B.7: exclude conversations THIS user hid (soft-hide); doesn't
+                // affect the other participant. `hidden` inverts it for the hidden screen.
                 hiddenBy: hidden
                     ? new Types.ObjectId(profileId)
                     : { $ne: new Types.ObjectId(profileId) },
@@ -98,9 +94,8 @@ const getConversation = async (
                 preserveNullAndEmptyArrays: true,
             },
         },
-        // La vista previa no puede dejar el contenido de un mensaje borrado:
-        // acá es donde se corta, para que la lista de chats no sea la puerta
-        // que salta el vaciado que `getMessages` ya hace.
+        // The preview must not expose a deleted message's content: cut it here so
+        // the chat list isn't a second door around the scrubbing `getMessages` does.
         scrubLastMessageStage(),
         {
             $lookup: {
@@ -162,9 +157,8 @@ const getConversation = async (
                 preserveNullAndEmptyArrays: true, // keep the doc even if no otherUser
             },
         },
-        // Bloqueo (B.4): excluir de la lista las conversaciones 1-a-1 cuyo otro
-        // participante esta bloqueado (en cualquier sentido). Solo afecta 1-a-1;
-        // grupos/proyectos/bondLink pasan intactos.
+        // Blocking (B.4): exclude 1-to-1 conversations whose other participant is
+        // blocked (either direction). Groups/projects/bondLink pass through untouched.
         ...(blockedObjectIds.length > 0
             ? [
                   {
@@ -179,10 +173,9 @@ const getConversation = async (
                   },
               ]
             : []),
-        // C.5 (Tanda 2): ocultar del listado las conversaciones 1-a-1 cuyo otro
-        // participante fue bloqueado por un admin (User.isBlocked = true). Se
-        // resuelve el User via NormalUser.user y se filtra. Grupos/proyectos/
-        // bond-link NO se ven afectados (misma politica que el bloqueo P2P).
+        // C.5: also hide 1-to-1 conversations whose other participant was blocked by
+        // an admin (User.isBlocked, resolved via NormalUser.user). Groups/projects/
+        // bond-link are unaffected — same policy as P2P blocking.
         {
             $lookup: {
                 from: 'users',
@@ -208,8 +201,7 @@ const getConversation = async (
             },
         },
         {
-            // Integrantes del chat (todos los participantes) con nombre y foto,
-            // para mostrar avatares apilados + nombres en la UI.
+            // Chat members with name and photo, for stacked avatars + names in the UI.
             $lookup: {
                 from: 'normalusers',
                 localField: 'participants',
@@ -232,19 +224,15 @@ const getConversation = async (
                                             '$$conversationId',
                                         ],
                                     },
-                                    // Un mensaje BORRADO no cuenta como no leido.
-                                    // El contador global del navbar sí lo filtra;
-                                    // sin esto los dos numeros se contradecian y
-                                    // quedaba una conversacion en negrita con
-                                    // badge apuntando a un mensaje inexistente.
+                                    // A DELETED message doesn't count as unread (the
+                                    // navbar counter filters it too, else the two disagreed).
                                     {
                                         $ne: [
                                             { $ifNull: ['$isDeleted', false] },
                                             true,
                                         ],
                                     },
-                                    // Unificado sobre `seenBy`: no leido si el
-                                    // usuario no esta en el array seenBy.
+                                    // Unified on `seenBy`: unread if the user isn't in it.
                                     {
                                         $not: {
                                             $in: [
@@ -288,11 +276,10 @@ const getConversation = async (
                 type: '$type',
                 userData: {
                     _id: '$otherUser._id',
-                    // El EMAIL se sacó de la proyección: el chat 1-a-1 no exige
-                    // amistad, así que cualquiera podía abrir una conversación con
-                    // cualquier perfil y leerle el mail acá. Los perfiles públicos
-                    // ya recortan ese dato; esta era la puerta que quedaba abierta.
-                    // El front no lo usa (verificado), así que no rompe nada.
+                    // EMAIL was dropped from the projection: 1-to-1 chat needs no
+                    // friendship, so anyone could open a conversation with any profile
+                    // and read their mail here. Public profiles already trim it, and
+                    // the front doesn't use it (verified).
                     name: '$otherUser.name',
                     profile_image: '$otherUser.profile_image',
                 },
@@ -361,10 +348,8 @@ const getConversationMediaFiles = async (
     conversationId: string,
     query: Record<string, unknown>
 ) => {
-    // R3 (Tanda 0): cap del limit (anti-DoS). Ahora por el helper común, que
-    // además pone PISO: el `Number(query.page) || 1` pelado dejaba pasar `-3`
-    // (skip negativo → Mongo lo rechaza → 500) y `1e999` (Infinity → ídem), y el
-    // `Math.min(..., 100)` no protegía de un `?limit=-5` (queda -5, también 500).
+    // R3: limit cap (anti-DoS) via the shared clamp helper, which also sets a floor
+    // (bare `Number(page) || 1` let -3 and 1e999 through → Mongo rejected → 500).
     const page = clampPage(query.page);
     const limit = clampLimit(query.limit, 20, 100);
     const skip = (page - 1) * limit;
@@ -381,9 +366,8 @@ const getConversationMediaFiles = async (
         );
     }
 
-    // Mismos filtros que getMessages: la galería NO debe mostrar adjuntos de
-    // mensajes BORRADOS (isDeleted) ni de usuarios BLOQUEADOS (el bloqueo alcanza
-    // a los grupos). Antes el $match solo filtraba por conversación → leak.
+    // Same filters as getMessages: the gallery must not show attachments from
+    // DELETED messages or BLOCKED users (blocking reaches groups). The old $match leaked them.
     const blockedObjectIds = await getBlockedObjectIdsFor(profileId);
     const [result] = await Message.aggregate(
         buildMediaGalleryPipeline({
@@ -405,17 +389,16 @@ const getConversationMediaFiles = async (
             totalPages: totalPages,
             total: totalUrls,
         },
-        // `urls` queda EXACTAMENTE como estaba (misma lista, mismo orden); la
-        // clave nueva es `items`, con el mensaje y la fecha de cada adjunto.
+        // `urls` stays exactly as before (same list, same order); `items` is new.
         urls: urlsFromItems(items),
         items,
     };
 };
 
 /**
- * B.7 (Tanda 2) - Ocultar/des-ocultar una conversacion SOLO para el usuario
- * actual (soft-hide por participante). No borra datos ni afecta al otro.
- * @param hide true => ocultar (agrega a hiddenBy); false => des-ocultar.
+ * B.7 - Hide/unhide a conversation for the current user only (per-participant
+ * soft-hide). Deletes nothing and doesn't affect the other side.
+ * @param hide true => hide (add to hiddenBy); false => unhide.
  */
 const setConversationHidden = async (
     profileId: string,
@@ -428,7 +411,7 @@ const setConversationHidden = async (
 
     const profileObjectId = new Types.ObjectId(profileId);
 
-    // El usuario debe ser participante de la conversacion.
+    // The user must be a participant of the conversation.
     const conversation = await Conversation.findOne({
         _id: conversationId,
         participants: profileObjectId,

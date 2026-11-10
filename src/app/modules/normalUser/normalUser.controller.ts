@@ -101,10 +101,8 @@ const updatePeopleVisibility = catchAsync(async (req, res) => {
     });
 });
 
-// Precios de los planes: los DOS reales (PayPal en USD, MercadoPago en pesos del
-// día), calculados con la misma cotización que se usa al cobrar. Público a
-// propósito: los precios son información pública y la página tiene que poder
-// mostrarlos aunque nadie haya iniciado sesión.
+// Plan prices: both real ones (PayPal in USD, MercadoPago in the day's pesos) using the
+// same quote as billing. Public on purpose: the pricing page shows them logged out.
 const getSubscriptionPrices = catchAsync(async (req, res) => {
     const result = await NormalUserServices.getSubscriptionPrices();
     sendResponse(res, {
@@ -115,7 +113,7 @@ const getSubscriptionPrices = catchAsync(async (req, res) => {
     });
 });
 
-// Palanca manual del plan (admin). Única vía por la que un plan puede BAJAR.
+// Manual plan override (admin): the only path where a plan can go DOWN.
 const setSubscriptionByAdmin = catchAsync(async (req, res) => {
     const result = await NormalUserServices.setSubscriptionByAdmin(
         req.user.id,

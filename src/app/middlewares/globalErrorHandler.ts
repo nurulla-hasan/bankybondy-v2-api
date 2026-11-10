@@ -14,7 +14,7 @@ const globalErrorHandler: ErrorRequestHandler = (
   // let message = 'Something went wrong';
   let errorMessage = 'Something went wrong';
   let errorDetails = {};
-  // Codigo maquina-legible opcional (ej. 'BOND_LIMIT_REACHED').
+  // Optional machine-readable code (e.g. 'BOND_LIMIT_REACHED').
   let errorCode: string | undefined;
 
   if (err.code === 11000) {
@@ -36,9 +36,8 @@ const globalErrorHandler: ErrorRequestHandler = (
     errorDetails = {
       issues: err.issues,
     };
-    // Un body invalido es culpa del cliente, no del server. Faltaba esta linea
-    // (las ramas vecinas si la tienen) y los errores de validacion salian con el
-    // statusCode inicial 500, ensuciando el monitoreo como error interno.
+    // An invalid body is the client's fault: without this the Zod branch returned
+    // the initial 500 and polluted internal-error monitoring.
     statusCode = 400;
   } else if (err instanceof mongoose.Error.ValidationError) {
     // message = 'Mongoose Validation Error';
@@ -55,18 +54,16 @@ const globalErrorHandler: ErrorRequestHandler = (
     statusCode = 400;
     // message = 'Invalid ID';
     errorMessage = `${err.value} is not a valid ID!`;
-    // No serializar el objeto de error crudo al cliente (fuga de internals).
+    // Do not serialize the raw error object to the client (internals leak).
     errorDetails = { path: err?.path, value: err?.value };
   } else if (err?.name === 'MulterError') {
     // Multer (and multer-s3) failures used to fall through to the default 500.
-    // A size overflow is the client's fault and deserves a 413, not an
-    // "Internal Server Error" toast with no information.
+    // A size overflow is the client's fault and deserves a 413.
     statusCode = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
     errorMessage = err.message;
   }
 
-  // Los 5xx se registran con stack: sin esto, un fallo de multer/S3 salía
-  // como 500 opaco y no dejaba rastro en logs/winston/errors.
+  // Log 5xx with stack; otherwise a multer/S3 failure leaves no trace in errors log.
   if (statusCode >= 500) {
     errorLogger.error(
       `[http] ${req.method} ${req.originalUrl} -> ${statusCode}`,
@@ -78,7 +75,7 @@ const globalErrorHandler: ErrorRequestHandler = (
     success: false,
     message: errorMessage,
     // errorMessage: errorMessage,
-    // Solo se incluye cuando el error trae un codigo maquina-legible.
+    // Only included when the error carries a machine-readable code.
     ...(errorCode ? { code: errorCode } : {}),
     errorDetails,
     stack: process.env.NODE_ENV === 'development' ? (err?.stack || null) : undefined,

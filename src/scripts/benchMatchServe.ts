@@ -1,9 +1,6 @@
-/* Benchmark local: lectura LEGACY (superset por bonds) vs FEED (top-N indexado).
- *
- * No levanta la API ni necesita auth. Mide el costo dominante del endpoint:
- * leer + hidratar + serializar las filas que el serving necesita.
- *
- * Uso: npx tsx src/scripts/benchMatchServe.ts [--bond=<id>]
+/* Local benchmark: LEGACY read (superset by bonds) vs FEED (indexed top-N).
+ * No API or auth needed; measures read + hydrate + serialize of serving rows.
+ * Usage: npx tsx src/scripts/benchMatchServe.ts [--bond=<id>]
  */
 import mongoose from 'mongoose';
 import { performance } from 'perf_hooks';

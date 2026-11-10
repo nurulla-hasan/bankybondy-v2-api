@@ -19,28 +19,12 @@ import {
   setRefreshCookie,
 } from './refreshCookie';
 
-// CONTRATO EXPLÍCITO web vs. nativo para el refresh token.
-//
-// El refresh token viaja SIEMPRE en la cookie HttpOnly, que el JS del browser no
-// puede leer. Además venía en el JSON de la respuesta, y ahí un XSS que
-// interceptara la respuesta del login se lo llevaba pese a la cookie segura.
-//
-// No se puede sacar del JSON y listo: hay una app nativa proyectada para Play
-// Store, y una app nativa NO puede depender de cookies de navegador — necesita el
-// token para guardarlo en su almacenamiento seguro. Así que en vez de cerrar la
-// puerta, se hace explícita: el cliente nativo la pide con `x-client-type: native`.
-//
-// Por qué un header alcanza en ESTE punto: para leer el refresh token del JSON hay
-// que provocar un login, y para eso hacen falta las credenciales del usuario. Un
-// atacante que pueda hacer eso ya tiene la contraseña, así que el header no le
-// suma nada. El endpoint que SÍ es alcanzable con sólo la cookie
-// (`/refresh-token`) nunca devuelve un refresh token: sólo `accessToken`. Por ahí
-// no hay fuga posible.
+// Refresh token contract: always in the HttpOnly cookie; also echoed in the JSON only
+// when the native client asks via `x-client-type: native` (native apps can't use cookies).
 const CLIENT_TYPE_HEADER = 'x-client-type';
 
-// Exportada para que la use también user.controller (verifyCode). Cualquier
-// endpoint que pueda devolver un refresh token DEBE pasar por acá, o el token se
-// filtra en el JSON para el browser.
+// Exported for user.controller (verifyCode): any endpoint that can return a refresh
+// token must go through here, or it leaks into the browser JSON.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const withRefreshTokenPolicy = (result: any, req: { headers: any }) => {
     if (!result || typeof result !== 'object') return result;
@@ -48,7 +32,7 @@ export const withRefreshTokenPolicy = (result: any, req: { headers: any }) => {
         String(req.headers?.[CLIENT_TYPE_HEADER] ?? '').toLowerCase() ===
         'native';
     if (isNative) return result;
-    // Browser: se omite del JSON. La cookie HttpOnly ya lo lleva.
+    // Browser: omit from JSON; the HttpOnly cookie already carries it.
     // eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
     const { refreshToken: _omitted, ...rest } = result;
     return rest;
@@ -56,7 +40,7 @@ export const withRefreshTokenPolicy = (result: any, req: { headers: any }) => {
 
 const loginUser = catchAsync(async (req, res) => {
   const result = await authServices.loginUserIntoDB(req.body);
-  // Seteamos tanto access token como refresh token en cookies HttpOnly para el browser
+  // Set access and refresh tokens as HttpOnly cookies for the browser
   if (result?.accessToken || result?.refreshToken) {
     setAuthCookies(res, {
       accessToken: result?.accessToken,
@@ -77,8 +61,8 @@ const changePassword = catchAsync(async (req, res) => {
     passwordData,
   );
 
-  // Cambiar la contraseña actualiza passwordChangedAt → invalida los tokens viejos.
-  // El service emite tokens NUEVOS: seteamos cookies nuevas para el browser.
+  // Changing the password updates passwordChangedAt, killing old tokens; the service
+  // issues new ones, so set fresh cookies.
   if (result?.accessToken || result?.refreshToken) {
     setAuthCookies(res, {
       accessToken: result?.accessToken,
@@ -95,15 +79,14 @@ const changePassword = catchAsync(async (req, res) => {
 });
 
 const refreshToken = catchAsync(async (req, res) => {
-  // Browser: la cookie HttpOnly `refreshToken` (el JS del front ya NO la manda ni
-  // la ve). Móvil / otros clientes: el refresh token por el body. Se prioriza la
-  // cookie y se cae al body por compatibilidad.
+  // Browser: HttpOnly `refreshToken` cookie. Mobile/other clients: token in body.
+  // Cookie wins; body is the compatibility fallback.
   const token = req.cookies?.refreshToken || req.body?.refreshToken;
   if (!token) {
     throw new AppError(httpStatus.BAD_REQUEST, 'Refresh token is required');
   }
   const result = await authServices.refreshToken(token);
-  // Seteamos el nuevo accessToken en cookie HttpOnly también
+  // Also set the new access token as an HttpOnly cookie
   if (result?.accessToken) {
     setAccessCookie(res, result.accessToken);
   }
@@ -115,32 +98,22 @@ const refreshToken = catchAsync(async (req, res) => {
   });
 });
 
-// B0 (bankybondy-v2): token de handshake para Socket.IO.
-//
-// El front con cookie HttpOnly no puede leer el access token, y el socket exige
-// un JWT en `handshake.auth.token` (`socket.ts:318`). Este endpoint, ya
-// autenticado por la cookie, devuelve un token de 30 minutos que sirve PARA ESO
-// Y NADA MÁS: `middlewares/auth.ts` rechaza la claim `scope:'socket'` en la API
-// HTTP, así que robar este token no abre la API. El socket tampoco lo miraba
-// antes ni lo mira ahora — sólo lee `decode.id` y vuelve a chequear el estado del
-// usuario en la DB, con lo que un usuario bloqueado/borrado/sin verificar sigue
-// sin poder conectar.
+// B0 (bankybondy-v2): Socket.IO handshake token. Cookie-based browsers can't read the
+// access token, and scope 'socket' is rejected by the HTTP API, so it opens no API.
 const socketToken = catchAsync(async (req, res) => {
     const claims = buildSocketTokenClaims(req.user);
     if (!claims) {
         throw new AppError(
             httpStatus.UNAUTHORIZED,
             'Your session is missing its profile. Please log in again.',
-            // Mismo código que `auth.ts` cuando el profileId no sirve: la sesión
-            // está muerta y el front tiene que deslogear, no reintentar.
+            // Same code as `auth.ts` when profileId is unusable: the session is dead,
+            // so the client must log out instead of retrying.
             'PROFILE_MISSING'
         );
     }
     const token = createToken(
-        // Cast de tipos sólo: `req.user` sale de un JwtPayload (role: string) y
-        // `createToken` declara TUserRole. El valor ES el rol fresco de la DB que
-        // puso el middleware (`auth.ts:166-172`); agrandarle el tipo al util
-        // compartido por este detalle sería peor.
+        // Type-only cast: `req.user` comes from JwtPayload (role: string) while
+        // `createToken` declares TUserRole; the value is the fresh role from the DB.
         { ...claims, role: claims.role as TUserRole },
         config.jwt_access_secret as string,
         SOCKET_TOKEN_EXPIRES_IN
@@ -153,8 +126,7 @@ const socketToken = catchAsync(async (req, res) => {
     });
 });
 
-// Logout: borra las cookies HttpOnly (el browser no puede hacerlo desde JS).
-// Idempotente y público.
+// Logout: clears the HttpOnly cookies (browser JS can't). Idempotent and public.
 const logoutUser = catchAsync(async (req, res) => {
   clearAuthCookies(res);
   sendResponse(res, {
@@ -170,21 +142,15 @@ const forgetPassword = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    // Mensaje CONDICIONAL a propósito (anti-enumeración): no confirma que la
-    // cuenta exista. El service manda el código sólo si la cuenta es válida.
+    // Conditionally worded on purpose (anti-enumeration): never confirms the account.
     message: 'Si esa cuenta existe, te enviamos un código para restablecer tu contraseña.',
     data: result,
   });
 });
 
 const resetPassword = catchAsync(async (req, res) => {
-  // const token = req?.headers?.authorization;
-
-  // if (!token) {
-  //   throw new AppError(httpStatus.BAD_REQUEST, 'Your token is invalid');
-  // }
   const result = await authServices.resetPassword(req.body);
-  // Seteamos cookies HttpOnly de sesión para el browser
+  // Set session HttpOnly cookies for the browser
   if (result?.accessToken || result?.refreshToken) {
     setAuthCookies(res, {
       accessToken: result?.accessToken,
@@ -216,7 +182,7 @@ const resendResetCode = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: httpStatus.OK,
     success: true,
-    // Condicional a propósito, igual que forgetPassword.
+    // Conditional on purpose, same as forgetPassword.
     message: 'Si esa cuenta existe, te reenviamos el código.',
     data: result,
   });

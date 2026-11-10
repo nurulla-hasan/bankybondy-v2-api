@@ -3,16 +3,8 @@ import Conversation from '../modules/conversation/conversation.model';
 import { emitConversationSnapshots } from './emitConversationSnapshots';
 
 /**
- * Avisar del borrado a los que están en la conversación.
- *
- * La respuesta de `DELETE /message/delete-message/:id` es el documento borrado,
- * que solo ve quien lo borro. El otro lado se quedaba con el texto en la burbuja
- * y con el preview intacto en su lista hasta el próximo refresco — y si era el
- * último mensaje, el preview mostraba contenido que ya no existe.
- *
- * Acá (y no dentro de `message.service`) porque el servicio no debe conocer la
- * capa de sockets: `socket.ts` importa `handleChat`, que importa `message.service`,
- * así que un `import` del `io` en el servicio cerraría un ciclo de módulos.
+ * Tells the conversation's members about a deletion (the HTTP response only reaches the deleter).
+ * Lives here, not in `message.service`, to avoid an `io` import cycle.
  */
 export const notifyMessageDeletion = async (
     io: IOServer | null,
@@ -35,14 +27,13 @@ export const notifyMessageDeletion = async (
             }
         );
 
-        // Y la fila de la lista: el preview va a salir vacío con isDeleted=true
-        // (scrubDeletedPreview), no con el texto borrado.
+        // Also the list row: the preview comes out empty with isDeleted=true (scrubDeletedPreview).
         await emitConversationSnapshots(io, {
             _id: conversation._id,
             type: conversation.type,
             participants: conversation.participants,
         });
     } catch {
-        // Silencioso a proposito: se pierde el aviso, no el borrado (ya quedó escrito).
+        // Silent on purpose: the notice is lost, not the deletion (already persisted).
     }
 };

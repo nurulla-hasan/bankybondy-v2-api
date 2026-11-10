@@ -1,10 +1,8 @@
 import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
 
-// Categorías agrupadas para el SILENCIADO (Fase 3, Tanda C). El usuario silencia
-// por CATEGORÍA (no por tipo suelto); cada categoría agrupa los tipos que le
-// corresponden. Silenciar una categoría NO borra ni deja de crear la
-// notificación: sólo hace que esos tipos no sumen al globito (el conteo de no
-// vistas) NI aparezcan en la lista de la campana (opción a): "registra sin molestar".
+// Categories for MUTING (phase 3). Users mute by CATEGORY, not by single type.
+// Muting never deletes or stops creating notifications: those types just stop
+// counting toward the badge and stop showing in the bell list ("log without noise").
 export const NOTIFICATION_CATEGORY_TYPES: Record<string, string[]> = {
     matches: [ENUM_NOTIFICATION_TYPE.MATCH],
     trueques: [
@@ -24,10 +22,10 @@ export const NOTIFICATION_CATEGORY_TYPES: Record<string, string[]> = {
     suscripcion: [ENUM_NOTIFICATION_TYPE.SUBSCRIPTION],
 };
 
-// Categorías válidas (las que el front puede silenciar). Fuente de verdad única.
+// Valid categories (what the front can mute). Single source of truth.
 export const NOTIFICATION_CATEGORIES = Object.keys(NOTIFICATION_CATEGORY_TYPES);
 
-/** Expande una lista de categorías silenciadas a los TIPOS a excluir del conteo. */
+/** Expands muted categories into the TYPES excluded from the count. */
 export const mutedTypesFromCategories = (categories?: string[]): string[] => {
     if (!Array.isArray(categories) || categories.length === 0) return [];
     const types: string[] = [];
@@ -38,7 +36,7 @@ export const mutedTypesFromCategories = (categories?: string[]): string[] => {
     return types;
 };
 
-/** Categoría a la que pertenece un tipo de notificación (o null si ninguna). */
+/** Category a notification type belongs to (or null). */
 export const categoryForType = (type?: string): string | null => {
     if (!type) return null;
     for (const [cat, types] of Object.entries(NOTIFICATION_CATEGORY_TYPES)) {
@@ -47,7 +45,7 @@ export const categoryForType = (type?: string): string | null => {
     return null;
 };
 
-/** Filtra una lista arbitraria dejando sólo categorías válidas y sin duplicados. */
+/** Filters an arbitrary list down to valid, de-duplicated categories. */
 export const sanitizeCategories = (categories: unknown): string[] => {
     if (!Array.isArray(categories)) return [];
     return [...new Set(categories)].filter(

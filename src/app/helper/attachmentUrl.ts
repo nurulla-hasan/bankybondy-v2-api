@@ -1,18 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Validación de URLs de adjuntos de chat.
- *
- * Los adjuntos legítimos se suben por REST a nuestro S3 y se sirven SIEMPRE desde
- * nuestro CloudFront (`getCloudFrontUrl` = `${CLOUDFRONT_URL}/<key>`). El socket
- * `send-message`, en cambio, recibía `data.imageUrl/videoUrl/pdfUrl` CRUDOS del
- * cliente y los guardaba tal cual → un cliente malicioso podía inyectar CUALQUIER
- * URL (phishing / malware / rastreo por beacon) como "adjunto" del chat.
- *
- * Acá exigimos que cada URL sea de NUESTRO CDN: host EXACTO, parseado con
- * `new URL()` para ignorar query/fragment (mismo criterio endurecido que
- * `deleteFromS3`, que frena bypass tipo `https://evil.com/x?u=cdn/...`). Fail-closed:
- * si CLOUDFRONT_URL no está o la URL no matchea, se descarta (no se guarda).
- *
- * Funciones PURAS (el host del CDN se puede inyectar) → testeables en runTests.
+/* Chat attachment URL validation: only URLs served by our own CloudFront are
+ * accepted (the socket used to store raw client URLs → phishing/malware). Host
+ * match is exact and fail-closed; CLOUDFRONT_URL can be injected for tests.
  */
 
 const cdnHostFromEnv = (): string | null => {
@@ -23,7 +12,7 @@ const cdnHostFromEnv = (): string | null => {
     }
 };
 
-// ¿`value` es una URL de adjunto servida por NUESTRO CloudFront?
+// Is `value` an attachment URL served by our CloudFront?
 export const isCdnAttachmentUrl = (
     value: unknown,
     cdnHost: string | null = cdnHostFromEnv()
@@ -33,18 +22,15 @@ export const isCdnAttachmentUrl = (
     try {
         u = new URL(value);
     } catch {
-        return false; // no es una URL absoluta válida
+        return false; // not a valid absolute URL
     }
-    if (u.protocol !== 'https:') return false; // sin http/data/javascript/etc.
-    if (u.host !== cdnHost) return false; // host EXACTO (no subdominio ni path)
-    // La propiedad de seguridad es el HOST: si es nuestro CDN, el contenido es
-    // nuestro (no hay phishing/malware). El path no hace falta validarlo acá
-    // (y `new URL` ya normaliza los `..`); el borrado en S3 tiene su propio guard.
+    if (u.protocol !== 'https:') return false; // reject http/data/javascript/...
+    if (u.host !== cdnHost) return false; // exact host (no subdomain/path tricks)
+    // The security property is the HOST; path is left to the S3 delete guard.
     return true;
 };
 
-// Deja SOLO las URLs válidas del CDN de un adjunto (array del cliente).
-// Acepta array, string suelto o null; siempre devuelve un array saneado.
+// Keeps only valid CDN URLs from a client attachment value (array, string or null).
 export const filterCdnAttachmentUrls = (
     value: unknown,
     cdnHost?: string | null
@@ -58,24 +44,21 @@ export const ATTACHMENT_FIELDS = ['imageUrl', 'videoUrl', 'pdfUrl'] as const;
 export type AttachmentField = (typeof ATTACHMENT_FIELDS)[number];
 
 export type AttachmentPartition = {
-    // Lo que se guarda, con las mismas claves que `data` del socket.
+    // Accepted URLs, keyed like the socket `data`.
     kept: Record<AttachmentField, string[]>;
-    // Cuántos adjuntos se fueron a la basura, por tipo, para poder decírselo.
+    // Dropped count per field, so the client can be told.
     dropped: Record<AttachmentField, number>;
-    // `CLOUDFRONT_URL` ausente o inválido: se descarta TODO por fail-closed.
+    // `CLOUDFRONT_URL` missing or invalid: everything is dropped (fail-closed).
     cdnUnconfigured: boolean;
-    // El cliente mandó adjuntos (válidos o no); sirve para distinguirse de "sin adjuntos".
+    // Attachments the client sent (valid or not); distinguishes "none sent".
     requested: number;
 };
 
 /*
- * Reparte los adjuntos en "guardable" y "descartado", con conteo.
+ * Splits attachments into kept/dropped with counts.
  *
- * Por qué no basta `filterCdnAttachmentUrls`: el filtro tiraba lo que no pasaba
- * SIN DECIR NADA, y el bubble del cliente quedaba "enviado" con el archivo
- * perdido para siempre. El contador es la única señal para emitir
- * `attachment-rejected` y para rechazar por adelantado el mensaje que se queda
- * sin texto Y sin adjuntos (que antes se guardaba vacío e invisible).
+ * The count is the only signal to emit `attachment-rejected` and to reject a
+ * message left with neither text nor attachments (previously stored empty).
  */
 export const partitionAttachmentUrls = (
     data: Record<string, any> | null | undefined,

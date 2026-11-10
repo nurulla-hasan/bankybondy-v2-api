@@ -9,24 +9,15 @@ import sendResponse from '../../utilities/sendResponse';
 import { ENUM_AUDIO_MODERATION_STATUS } from './audio.interface';
 import AudioService from './audio.service';
 
-// D.5 (Tanda 2): la subida NO bloquea la UI. Antes esperaba a
-// analyzeConversationAudio (descarga S3 + transcode ffmpeg + transcripcion +
-// analisis OpenAI) ANTES de responder, dejando el front "pensando". Ahora:
-//  1) se guarda el audio en S3 (multer, ya hecho) y se crea el registro en
-//     estado 'processing'; se responde de inmediato (202).
-//  2) la moderacion por IA (ya configurada) corre en SEGUNDO PLANO y pasa el
-//     audio a 'ready' o 'rejected'. No se agregan llamadas de IA nuevas.
-// El front hace polling del estado (GET /audio/moderation-status/:audioId) o lo
-// lee del registro (my-audios / single-audio) para saber cuando esta listo.
+// Upload does not block the UI: create the record as 'processing', reply 202 and
+// run AI moderation in the background. Clients poll the status.
 const createAudio = catchAsync(async (req, res) => {
     const ownerId = String(req.user.profileId);
     const audioFile: any = req.files?.audio?.[0];
     const coverFile: any = req.files?.audio_cover?.[0];
 
-    // Subida en dos pasos (cliente actual): los archivos ya están en S3 y llegan
-    // como URLs, validadas contra el CDN y el prefijo del dueño. Los clientes que
-    // suben todo en este mismo request (multipart) siguen funcionando: el archivo
-    // gana y cualquier URL que mande el body se descarta.
+    // Two-step upload: files already in S3 arrive as URLs (validated against the
+    // CDN and the owner's prefix). Inline multipart files win over body URLs.
     if (audioFile) {
         req.body.audio_url = getCloudFrontUrl(audioFile.key);
     } else if (typeof req.body.audio_url === 'string') {
@@ -51,10 +42,9 @@ const createAudio = catchAsync(async (req, res) => {
         throw new AppError(httpStatus.BAD_REQUEST, 'Cover image is required');
     }
 
-    // Se crea el registro en 'processing' y se responde rapido.
     const result = await AudioService.createAudio(req.user.profileId, req.body);
 
-    // Trabajo pesado (moderacion IA) desacoplado de la respuesta HTTP.
+    // AI moderation runs detached from the HTTP response.
     AudioService.processAudioModeration(
         result._id.toString(),
         result.audio_url
@@ -74,9 +64,8 @@ const createAudio = catchAsync(async (req, res) => {
     });
 });
 
-// Paso 1 de la subida en dos pasos. Deja uno o los dos archivos en S3 bajo el
-// prefijo del dueño y devuelve las URLs; el diálogo publica después con JSON, o
-// borra lo que no va a usar con deleteUploadedAudioFiles.
+// Step 1 of the two-step upload: store files under the owner's prefix and
+// return their URLs.
 const uploadAudioFiles = catchAsync(async (req, res) => {
     const audioFile: any = req.files?.audio?.[0];
     const coverFile: any = req.files?.audio_cover?.[0];
@@ -98,8 +87,7 @@ const uploadAudioFiles = catchAsync(async (req, res) => {
     });
 });
 
-// Borra archivos staged que nunca se publicaron (diálogo cancelado o archivo
-// reemplazado). Sólo acepta URLs propias y aún no publicadas.
+// Delete staged files that were never published (dialog cancelled or replaced).
 const deleteUploadedAudioFiles = catchAsync(async (req, res) => {
     const files = req.body?.files;
     if (
@@ -123,7 +111,7 @@ const deleteUploadedAudioFiles = catchAsync(async (req, res) => {
     });
 });
 
-// D.5: polling del estado de moderacion de un audio propio.
+// Poll the moderation status of an owned audio.
 const getModerationStatus = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.getModerationStatus(
@@ -138,7 +126,6 @@ const getModerationStatus = catchAsync(async (req, res) => {
     });
 });
 
-// Get All Audios
 const getAllAudios = catchAsync(async (req, res) => {
     const result = await AudioService.getAllAudios(
         req.query,
@@ -151,7 +138,6 @@ const getAllAudios = catchAsync(async (req, res) => {
         data: result,
     });
 });
-// Get All Audios
 const getMyAudios = catchAsync(async (req, res) => {
     const result = await AudioService.getMyAudios(
         req.user.profileId,
@@ -165,7 +151,7 @@ const getMyAudios = catchAsync(async (req, res) => {
     });
 });
 
-// Charlas publicas de un usuario (para su pagina de perfil). Listado ligero.
+// Public talks of a user (profile page), lightweight list.
 const getAudiosByUser = catchAsync(async (req, res) => {
     const { userId } = req.params;
     const result = await AudioService.getAudiosByUser(
@@ -180,7 +166,6 @@ const getAudiosByUser = catchAsync(async (req, res) => {
     });
 });
 
-// Get Audio by ID
 const getAudioById = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.getAudioById(
@@ -195,23 +180,10 @@ const getAudioById = catchAsync(async (req, res) => {
     });
 });
 
-// Update Audio
 const updateAudio = catchAsync(async (req, res) => {
-    // SEGURIDAD (borrado arbitrario de S3 + robo de autoría): las URLs de archivo
-    // y el dueño se DESCARTAN del body del cliente antes de nada. Sólo pueden
-    // venir del uploader (más abajo) o del registro existente.
-    //
-    // Sin esto: `validateRequest` valida una COPIA del body y no lo reescribe, así
-    // que las claves que el schema no declara llegan intactas al service; y el
-    // `safePayload` del service filtra contadores y moderación pero dejaba pasar
-    // `audio_url` y `user`. Con eso alcanzaba para:
-    //  - Borrar CUALQUIER archivo del bucket (foto de perfil, portada o audio de
-    //    cualquier persona) en dos requests: una para apuntar el registro al
-    //    archivo ajeno, otra para que `deleteFileFromS3(audio.audio_url)` lo borre.
-    //    `deleteFileFromS3` valida el host del CDN pero NO la propiedad: eso es
-    //    responsabilidad de quien lo llama, y acá no se hacía.
-    //  - Regalarle un audio ya aprobado al perfil de otra persona (`user`).
-    //  - Hacer que el servidor descargue una URL arbitraria al re-moderar.
+    // SECURITY: drop client-supplied file URLs and owner from the body; only the
+    // uploader or the existing record may set them. Prevents deleting arbitrary
+    // S3 files and gifting authorship of an audio.
     delete req.body.audio_url;
     delete req.body.cover_image;
     delete req.body.user;
@@ -238,7 +210,6 @@ const updateAudio = catchAsync(async (req, res) => {
     });
 });
 
-// Delete Audio
 const deleteAudio = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.deleteAudio(req.user.profileId, audioId);
@@ -249,7 +220,6 @@ const deleteAudio = catchAsync(async (req, res) => {
         data: result,
     });
 });
-// give rating
 const giveRating = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.giveRating(
@@ -265,7 +235,7 @@ const giveRating = catchAsync(async (req, res) => {
     });
 });
 
-// Vocabulario controlado de feeling tags (publico).
+// Public controlled vocabulary of feeling tags.
 const getFeelingTags = catchAsync(async (req, res) => {
     const result = AudioService.getFeelingTags();
     sendResponse(res, {
@@ -276,7 +246,7 @@ const getFeelingTags = catchAsync(async (req, res) => {
     });
 });
 
-// Upsert del feedback del oyente (comentario + feeling tags) para un audio.
+// Upsert the listener's feedback (comment + feeling tags) for an audio.
 const giveFeedback = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.upsertAudioFeedback(
@@ -292,7 +262,7 @@ const giveFeedback = catchAsync(async (req, res) => {
     });
 });
 
-// Listado paginado (publico) del feedback de un audio + agregados de sensaciones.
+// Public paginated feedback plus mood aggregates.
 const getAudioFeedback = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.getAudioFeedback(
@@ -308,8 +278,7 @@ const getAudioFeedback = catchAsync(async (req, res) => {
     });
 });
 
-// D.5 (Admin): listado de audios para el panel de administracion (todos los
-// estados y bloqueados/no bloqueados). Filtrable por query.
+// Admin listing: every moderation state, blocked or not.
 const getAudiosForAdmin = catchAsync(async (req, res) => {
     const result = await AudioService.getAudiosForAdmin(req.query);
     sendResponse(res, {
@@ -320,7 +289,7 @@ const getAudiosForAdmin = catchAsync(async (req, res) => {
     });
 });
 
-// D.5 (Admin): bloqueo/desbloqueo reversible (toggle) de un audio.
+// Admin toggle of the audio's blocked flag.
 const blockUnblockAudioByAdmin = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.setAudioBlockedByAdmin(audioId);
@@ -332,7 +301,7 @@ const blockUnblockAudioByAdmin = catchAsync(async (req, res) => {
     });
 });
 
-// D.5 (Admin): eliminacion definitiva de un audio por el administrador.
+// Admin hard delete of an audio.
 const deleteAudioByAdmin = catchAsync(async (req, res) => {
     const { audioId } = req.params;
     const result = await AudioService.deleteAudioByAdmin(audioId);

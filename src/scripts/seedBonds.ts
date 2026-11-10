@@ -1,20 +1,7 @@
 /* eslint-disable no-console */
 /**
- * Datos de DEMO para la sección Bonds (requests + matches + links).
- *
- * Crea una cuenta demo con su perfil, 5 usuarios contraparte, 13 bond requests,
- * la caché de matches (BondMatch) ya computada y 3 BondLinks (Ongoing /
- * Completed / Canceled). Pensado para desarrollo: re-ejecutable e idempotente.
- *
- * Set BONDS_SEED_DATABASE_URL to an explicitly disposable verify/scratch database first.
- * Production seeding and implicit application-database fallback are prohibited.
- * Uso (desde la raíz del backend):
- *   pnpm seed:bonds                       # crea/repuebla la cuenta demo
- *   pnpm seed:bonds --user yo@email.com   # siembra sobre TU perfil existente
- *   pnpm seed:bonds --clean               # borra SOLO lo sembrado
- *
- * La limpieza se acota a los emails demo y (con --user) a los offers sembrados
- * del perfil indicado, así que no toca datos reales.
+ * DEMO data for the Bonds section (requests + matches + links); idempotent and
+ * re-runnable, dev only. Requires BONDS_SEED_DATABASE_URL to name a disposable DB.
  */
 import mongoose, { Types } from 'mongoose';
 import { ENUM_BOND_REQUEST_STATUS } from '../app/modules/bondRequest/bondRequest.enum';
@@ -97,7 +84,7 @@ type BondSeed = {
 };
 
 const BOND_SEEDS: BondSeed[] = [
-    // ── Dueño / cuenta demo ──────────────────────────────────────────────
+    // ── Owner / demo account ─────────────────────────────────────────────
     {
         key: 'ob1',
         owner: 'owner',
@@ -160,7 +147,7 @@ const BOND_SEEDS: BondSeed[] = [
         hoursAgo: 190,
     },
 
-    // ── Contrapartes ─────────────────────────────────────────────────────
+    // ── Counterparts ─────────────────────────────────────────────────────
     {
         key: 'ab1',
         owner: 'ana',
@@ -299,7 +286,7 @@ const MATCH_SEEDS = [
     },
 ];
 
-/** Vector determinista de 1536 dims: la longitud es lo único que valida el schema. */
+/** Deterministic 1536-dim vector: the schema only validates its length. */
 const vectorFor = (seed: string): number[] => {
     let h = 2166136261;
     for (let i = 0; i < seed.length; i += 1) {
@@ -560,7 +547,7 @@ async function main() {
         profiles.set(person.key, profile._id as Types.ObjectId);
     }
 
-    // Fuera del pool de recomputo: la caché sembrada se sirve tal cual.
+    // Outside the recompute pool: the seeded cache is served as-is.
     const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
 
     const bondIdByKey = new Map<string, Types.ObjectId>();
@@ -583,8 +570,8 @@ async function main() {
             isLinked: false,
             offerVector: vectorFor(`${seed.key}:offer:${seed.offer}`),
             wantVector: vectorFor(`${seed.key}:want:${seed.want}`),
-            // Ahora: los bonds sin matches sembrados responden 'ready' vacío
-            // (si no, el front queda sondeando 'computing' para siempre).
+            // Now: bonds with no seeded matches answer an empty 'ready' (otherwise
+            // the front polls 'computing' forever).
             matchesComputedAt: new Date(),
             matchesNextAt: farFuture,
             matchesGen: 1,

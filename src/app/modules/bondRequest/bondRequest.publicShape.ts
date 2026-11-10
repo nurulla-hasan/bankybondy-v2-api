@@ -1,24 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Serializador PÚBLICO de un BondRequest para las tarjetas de match.
+/* Public serializer for BondRequest match cards.
  *
- * WHITELIST explícito: SOLO estos campos salen al cliente. Todo lo demás del
- * modelo —en especial la ubicación GPS (`location.coordinates`) y los flags
- * internos (isDeleted / isPause / isLinked / matchesComputedAt / *Vector)—
- * queda FUERA por defecto.
+ * Explicit WHITELIST: only these fields reach the client. Everything else —
+ * notably GPS (`location.coordinates`) and internal flags (*Vector, isLinked,
+ * matchesComputedAt...) — stays out by default.
  *
- * Por qué así (y no un `.select('-location ...')` en el endpoint): con denylist,
- * agregar un campo nuevo al modelo lo expone por accidente, y basta olvidarse un
- * `-campo` en UN endpoint para filtrar PII. Eso fue exactamente la fuga de GPS de
- * `getMatchingBondRequest`: el `.select('-wantVector -offerVector')` no excluía
- * `location`, y el `{...request}` mandaba las coordenadas exactas de cada
- * contraparte. Con whitelist es IMPOSIBLE filtrar por olvido.
- *
- * Función PURA (sin DB) → testeable en runTests (ver bondRequest.publicShape.test.ts).
+ * A denylist `.select('-location ...')` leaked exact GPS in
+ * `getMatchingBondRequest`; with a whitelist, forgetting a field cannot leak PII.
+ * Pure function (no DB), testable in runTests.
  */
 
-// Subconjunto del usuario que la tarjeta muestra (estrella + identidad mínima).
+// User subset the card shows (star rating + minimal identity).
 const publicUser = (u: any): any => {
-    // Aún sin poblar (ObjectId) o ausente: se devuelve tal cual, sin inventar shape.
+    // Still unpopulated (ObjectId) or absent: return as-is, don't invent a shape.
     if (!u || typeof u !== 'object') return u;
     return {
         _id: u._id,
@@ -28,9 +22,8 @@ const publicUser = (u: any): any => {
     };
 };
 
-// Devuelve SOLO lo que la tarjeta de match necesita: identidad, oferta, deseo y
-// el usuario acotado. (Los colores del intercambio se agregan aparte, en el
-// endpoint, porque se calculan por par y no viven en el BondRequest.)
+// Only what the match card needs: identity, offer, want and the narrow user.
+// (Swap colors are added by the endpoint; they are per-pair, not stored here.)
 export const publicMatchRequest = (raw: any): any => {
     if (!raw) return null;
     return {

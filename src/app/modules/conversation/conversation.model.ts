@@ -1,5 +1,5 @@
 import { Schema, model } from 'mongoose';
-import { IConversation } from './conversation.interface'; // Importing the interface
+import { IConversation } from './conversation.interface';
 import { ENUM_CONVERSATION_TYPE } from './conversation.enum';
 
 const conversationSchema = new Schema<IConversation>(
@@ -30,9 +30,8 @@ const conversationSchema = new Schema<IConversation>(
             ref: 'ChatGroup',
             default: null,
         },
-        // B.7 (Tanda 2): soft-hide por participante. Cada usuario que oculta la
-        // conversacion agrega su propio id aca; el listado la excluye para el,
-        // pero sigue visible para el otro participante (no se borran datos).
+        // B.7 (Tanda 2): per-participant soft hide. Each user who hides the
+        // conversation adds their id here; it is excluded only for them.
         hiddenBy: {
             type: [Schema.Types.ObjectId],
             ref: 'NormalUser',
@@ -42,8 +41,8 @@ const conversationSchema = new Schema<IConversation>(
     { timestamps: true }
 );
 
-// Las conversaciones se listan/consultan por participante y por bondLink. Sin
-// indices eran COLLSCAN en cada listado de mensajes/vinculos.
+// Conversations are listed/queried by participant and by bondLink; without these
+// indexes every listing was a COLLSCAN.
 conversationSchema.index({ participants: 1, updatedAt: -1 });
 conversationSchema.index({ bondLink: 1 });
 

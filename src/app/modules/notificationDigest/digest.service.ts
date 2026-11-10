@@ -1,8 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// Digest semanal por email (Fase 4). Junta las notificaciones de los últimos 7
-// días de cada usuario, las agrupa por categoría (respetando el SILENCIADO de la
-// Tanda C) y manda un resumen cálido. Todo pasa por el mismo `sendEmail`, así que
-// hereda el remitente que esté configurado (Gmail hoy, SES cuando se mude).
+// Weekly email digest (Phase 4): groups each user's last 7 days of notifications by
+// category (honoring Tanda C mutes) and sends a warm summary through `sendEmail`.
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { Types } from 'mongoose';
@@ -18,33 +16,29 @@ import {
 import { buildDigestHtml, DigestSection } from './digest.template';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-// Guarda dura: el cron NO manda nada hasta que se prenda esta variable. Evita
-// que un deploy dispare mails reales sin querer.
+// Hard guard: the cron sends nothing until this flag is on, so a deploy can't
+// accidentally fire real emails.
 const DIGEST_ENABLED = process.env.DIGEST_ENABLED === 'true';
-// Throttle entre mails (el sandbox de SES admite ~1/seg; 300ms es conservador).
+// Throttle between emails (SES sandbox allows ~1/sec; 300ms is conservative).
 const DIGEST_THROTTLE_MS = parseInt(process.env.DIGEST_THROTTLE_MS || '300');
 
-// Base pública de la API para el link de baja (List-Unsubscribe). El router monta
-// en '/', así que la ruta queda <API>/notification/digest-unsubscribe/<token>.
+// Public API base for the unsubscribe link (List-Unsubscribe); the router mounts at
+// '/', so the route is <API>/notification/digest-unsubscribe/<token>.
 const API_BASE = (config.base_url || 'https://api.bankybondy.com').replace(
     /\/+$/,
     ''
 );
 
-// Clave DEDICADA para los tokens de baja, derivada del secreto de acceso por
-// HMAC con una etiqueta fija. No requiere variable de entorno nueva, pero es
-// criptográficamente independiente: firmar con el MISMO secreto que los access
-// tokens dejaba un JWT de 10 años de vida, con validez de sesión, sentado en la
-// casilla de correo de cada usuario para siempre. Bastaba un cambio futuro en el
-// middleware de auth para convertirlo en un bypass de autenticación.
+// DEDICATED key for unsubscribe tokens, derived from the access secret via HMAC with
+// a fixed label. Signing with the access secret itself would leave a 10-year,
+// session-valid JWT in every inbox — one auth middleware change away from a bypass.
 const DIGEST_UNSUB_SECRET = crypto
     .createHmac('sha256', config.jwt_access_secret as string)
     .update('bankybondy:digest-unsub:v1')
     .digest('hex');
 
-// Token firmado de baja del digest (por usuario). Sólo habilita marcar
-// digestOptOut de ESE perfil. 1 año: sigue siendo un link de correo de vida
-// larga, pero deja de ser eterno.
+// Signed per-user unsubscribe token; only allows setting digestOptOut for that
+// profile. 1 year keeps the email link long-lived without being eternal.
 const buildDigestUnsubToken = (profileId: string): string =>
     jwt.sign({ purpose: 'digest-unsub', profileId }, DIGEST_UNSUB_SECRET, {
         expiresIn: '365d',
@@ -55,9 +49,9 @@ const digestUnsubUrl = (profileId: string): string =>
         profileId
     )}`;
 
-/** Da de baja del digest al dueño del token (List-Unsubscribe de un clic).
- *  Verifica la firma y el propósito; setea NormalUser.digestOptOut = true.
- *  Idempotente. Devuelve el email para el mensaje de confirmación (best-effort). */
+/** Opt the token owner out of the digest (one-click List-Unsubscribe): verifies
+ *  signature and purpose, sets NormalUser.digestOptOut = true. Idempotent; returns
+ *  the email for the confirmation message (best-effort). */
 export const unsubscribeFromDigest = async (
     token: string
 ): Promise<{ ok: boolean; email?: string }> => {
@@ -84,8 +78,8 @@ export const unsubscribeFromDigest = async (
     }
 };
 
-// Metadatos por categoría: etiqueta, color de marca, si muestra número (matches
-// NO, porque su conteo es volátil), y la frase cálida.
+// Category metadata: label, brand color, whether to show a count (matches NO,
+// its count is volatile), and the warm line.
 const CATEGORY_META: Record<
     string,
     { label: string; color: string; showCount: boolean; line: (n: number) => string }
@@ -125,8 +119,8 @@ const CATEGORY_META: Record<
     },
 };
 
-// Secciones de muestra para el PREVIEW cuando el usuario no tiene actividad real
-// (para poder ver el diseño igual).
+// Sample sections for the PREVIEW when the user has no real activity, so the layout
+// can still be seen.
 const SAMPLE_SECTIONS: DigestSection[] = [
     { label: 'Matches', color: '#4f46e5', count: null, line: 'Aparecieron nuevos matches para tus vínculos.' },
     { label: 'Trueques', color: '#06b6d4', count: 2, line: 'Tenés 2 novedades en tus trueques.' },
@@ -134,8 +128,8 @@ const SAMPLE_SECTIONS: DigestSection[] = [
     { label: 'Amistades', color: '#10b981', count: 3, line: 'Tenés 3 novedades de amistad.' },
 ];
 
-/** Junta la actividad de los últimos 7 días de un usuario y arma las secciones
- *  (excluyendo las categorías silenciadas). Devuelve [] si no hay nada. */
+/** Collect one user's last-7-day activity into sections (skipping muted categories).
+ *  Returns [] when empty. */
 export const buildUserSections = async (
     userId: string,
     mutedCategories: string[] = []
@@ -146,11 +140,11 @@ export const buildUserSections = async (
         { $group: { _id: '$type', count: { $sum: 1 } } },
     ]);
 
-    // type → count  ⇒  categoría → suma
+    // type → count  ⇒  category → sum
     const perCategory: Record<string, number> = {};
     for (const r of rows) {
         const cat = categoryForType(r._id);
-        if (!cat) continue; // tipos sin categoría (viejos GENERAL, etc.) no cuentan
+        if (!cat) continue; // types without a category (legacy GENERAL, etc.) don't count
         perCategory[cat] = (perCategory[cat] || 0) + (r.count || 0);
     }
 
@@ -170,8 +164,8 @@ export const buildUserSections = async (
     return sections;
 };
 
-/** Manda (o simula) el digest de UN usuario. `force` = mandar aunque no haya
- *  actividad (usa secciones de muestra), para el preview a la propia casilla. */
+/** Send (or simulate) ONE user's digest. `force` = send even with no activity
+ *  (sample sections), used for the preview to your own inbox. */
 export const sendDigestToUser = async (
     userId: string,
     opts: { dryRun?: boolean; force?: boolean } = {}
@@ -184,8 +178,8 @@ export const sendDigestToUser = async (
         .lean();
     if (!user?.email) return { sent: false, reason: 'no-email' };
 
-    // Baja del digest: no mandar el semanal a quien se dio de baja. El preview
-    // (force) SÍ se envía: lo pide el propio usuario desde sus preferencias.
+    // Opted out: never send the weekly digest. The preview (force) still sends
+    // because the user requests it from their preferences.
     if (user.digestOptOut && !force) {
         return { sent: false, reason: 'opted-out', email: user.email };
     }
@@ -196,7 +190,7 @@ export const sendDigestToUser = async (
     );
     if (sections.length === 0) {
         if (!force) return { sent: false, reason: 'no-activity', email: user.email };
-        sections = SAMPLE_SECTIONS; // preview: mostrar el diseño igual
+        sections = SAMPLE_SECTIONS; // preview: still show the layout
     }
 
     const html = buildDigestHtml({
@@ -212,17 +206,16 @@ export const sendDigestToUser = async (
         return { sent: false, reason: 'dry-run', email: user.email };
     }
 
-    // List-Unsubscribe (baja de un clic) → mejora entregabilidad del digest y
-    // cumple las guías de remitentes de Gmail. La URL apunta al endpoint público
-    // token-firmado; el One-Click hace POST y da de baja sin pasos extra.
+    // List-Unsubscribe (one-click opt-out) improves digest deliverability and matches
+    // Gmail sender guidelines; the token-signed URL is the public endpoint.
     const unsubUrl = digestUnsubUrl(userId);
     const headers = {
         'List-Unsubscribe': `<${unsubUrl}>`,
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
     };
 
-    // sendEmail ya no lanza (falla cerrada): devuelve booleano. Reflejamos el
-    // resultado real en vez de asumir envío exitoso.
+    // sendEmail no longer throws (fails closed): it returns a boolean, so reflect the
+    // real result instead of assuming success.
     const ok = await sendEmail({
         email: user.email,
         subject: 'Esta semana en BankyBondy 👋',
@@ -233,8 +226,8 @@ export const sendDigestToUser = async (
     return { sent: ok, email: user.email };
 };
 
-/** Corre el digest semanal para TODOS los usuarios con actividad reciente.
- *  Guardado por DIGEST_ENABLED (salvo dry-run). Throttle entre envíos. */
+/** Run the weekly digest for EVERY user with recent activity. Gated by
+ *  DIGEST_ENABLED (except dry-run) and throttled between sends. */
 export const sendWeeklyDigests = async (
     opts: { dryRun?: boolean; limit?: number } = {}
 ): Promise<{ enabled: boolean; candidates?: number; sent?: number; skipped?: number }> => {

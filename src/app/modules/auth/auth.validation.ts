@@ -25,23 +25,21 @@ const changePasswordValidationSchema = z.object({
   }),
 });
 
-// refresh token validation schema -----------
-// El refresh token ahora puede venir por la cookie HttpOnly (browser) en vez del
-// body (móvil), así que acá es OPCIONAL. La presencia real se valida en el
-// controller (cookie || body) devolviendo 400 si faltan ambos.
+// refresh token validation schema
+// Optional here: the token may arrive via the HttpOnly cookie (browser) instead
+// of the body (mobile). The controller validates presence (cookie || body) and
+// returns 400 if both are missing.
 const refreshTokenValidationSchema = z.object({
   body: z.object({
     refreshToken: z.string().optional(),
   }),
 });
 
-// forget password validation schema
 const forgetPasswordValidationSchema = z.object({
   body: z.object({
     email: z.string({ required_error: 'Email is required' }),
   }),
 });
-// reset password validation schema
 const resetPasswordValidationSchema = z.object({
   body: z.object({
     email: z.string({ required_error: 'Email is required' }),

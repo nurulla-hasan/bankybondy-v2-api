@@ -10,7 +10,7 @@ router.get(
     auth(USER_ROLE.user),
     ConversationController.getChatList
 );
-// Chats que ESTE usuario oculto — la contraparte de `/hide`, para poder des-ocultar.
+// Chats THIS user hid — the counterpart of `/hide`, so they can be unhidden.
 router.get(
     '/get-hidden-chats',
     auth(USER_ROLE.user),
@@ -21,7 +21,7 @@ router.get(
     auth(USER_ROLE.user),
     ConversationController.getConversationMediaFiles
 );
-// B.7 (Tanda 2): ocultar/des-ocultar una conversacion solo para el usuario.
+// Hide/unhide a conversation for this user only.
 router.patch(
     '/hide/:id',
     auth(USER_ROLE.user),

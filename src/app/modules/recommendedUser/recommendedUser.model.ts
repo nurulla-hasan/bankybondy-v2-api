@@ -8,13 +8,9 @@ const recommendedUserSchema = new Schema<IRecommendedUser>(
             ref: 'User',
             required: true,
         },
-        // Id de la CUENTA (User) que recomendó. Antes NO estaba declarado, así que
-        // Mongoose lo descartaba en silencio al insertar: el registro lo escribe
-        // (user.services) y el cron de limpieza de cuentas no verificadas filtra por
-        // él (`deleteMany({ recommendByUserId: { $in: expiredUserIds } })`), pero al
-        // no persistirse el cron nunca borraba nada. `recommendBy` guarda el perfil
-        // (NormalUser); este guarda la cuenta (User), que es contra la que corre el
-        // cron. Se indexa porque el cron consulta por este campo.
+        // Account (User) id of the recommender. `recommendBy` holds the profile
+        // (NormalUser); this one is what the expired-account cleanup cron filters
+        // on, hence the index.
         recommendByUserId: {
             type: Schema.Types.ObjectId,
             ref: 'User',

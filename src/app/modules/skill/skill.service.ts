@@ -4,13 +4,11 @@ import QueryBuilder from '../../builder/QueryBuilder';
 import { ISkill } from './skill.interface';
 import { Skill } from './skill.model';
 
-// Create Topic
 const createSkill = async (payload: ISkill) => {
     const result = await Skill.create(payload);
     return result;
 };
 
-// Get All Topics
 const getAllSkill = async (query: Record<string, unknown>) => {
     const skillQuery = new QueryBuilder(Skill.find(), query)
         .search(['name'])
@@ -27,7 +25,6 @@ const getAllSkill = async (query: Record<string, unknown>) => {
     };
 };
 
-// Get Topic by ID
 const getSkillById = async (skillId: string) => {
     const topic = await Skill.findById(skillId);
     if (!topic) {
@@ -36,7 +33,6 @@ const getSkillById = async (skillId: string) => {
     return topic;
 };
 
-// Update Topic
 const updateSkill = async (skillId: string, payload: ISkill) => {
     const skill = await Skill.findById(skillId);
     if (!skill) {
@@ -52,7 +48,6 @@ const updateSkill = async (skillId: string, payload: ISkill) => {
     return updatedTopic;
 };
 
-// Delete Topic
 const deleteTopic = async (skillId: string) => {
     const skill = await Skill.findById(skillId);
     if (!skill) {

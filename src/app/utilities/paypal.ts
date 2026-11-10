@@ -1,7 +1,6 @@
 import { core } from '@paypal/checkout-server-sdk';
 import config from '../config';
 
-// Set up PayPal environment
 const environment =
     config.paypal.mode == 'live'
         ? new core.LiveEnvironment(

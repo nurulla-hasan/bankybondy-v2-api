@@ -15,10 +15,9 @@ export interface BondLinkLifecycleDependencies {
     blockUser: typeof import('../userBlock/userBlock.service').default.blockUser;
 }
 
-/** Terminal conflicts now return 409 (formerly 400). Original membership remains
- * the authorization source, including already-Canceled self-leave/block retries.
- * Inject connection-bound models and startSession together for isolated callers.
- * External effects remain best-effort after commit, not exactly-once delivery.
+/** Terminal conflicts return 409 (formerly 400). Original membership is still the
+ * authorization source, including Canceled self-leave/block retries. Inject
+ * connection-bound models and startSession together; external effects stay best-effort.
  */
 export function createBondLinkLifecycle(dependencies: BondLinkLifecycleDependencies) {
     const { BondLink, Conversation, BondRating, startSession, recomputeReputation, sendNotification } = dependencies;
@@ -104,7 +103,7 @@ export function createBondLinkLifecycle(dependencies: BondLinkLifecycleDependenc
                 /* best-effort */
             }
 
-            // Se cerró el círculo → avisar a TODOS los participantes. Best-effort.
+            // Circle closed: notify ALL participants. Best-effort.
             (outcome.bondLink.participants ?? []).forEach((p: any) => {
                 sendNotification({
                     title: 'Se cerró el círculo',
@@ -167,8 +166,8 @@ export function createBondLinkLifecycle(dependencies: BondLinkLifecycleDependenc
                 .catch(() => undefined);
         }
 
-        // Aviso a los DEMÁS: el trueque no se concretó (sus vínculos siguen vivos).
-        // Best-effort; sólo el que ganó la transición notifica.
+        // Notify the OTHERS that the trade fell through (their links stay live).
+        // Best-effort; only the transition winner notifies.
         if (outcome.wonCancellation) {
             (outcome.bondLink.participants ?? [])
                 .filter((p: any) => p.toString() !== profileId.toString())

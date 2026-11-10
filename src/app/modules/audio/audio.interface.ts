@@ -1,14 +1,11 @@
 import { Types } from 'mongoose';
 
-// D.5 (Tanda 2): estado de moderacion/procesamiento del audio.
-// - processing: subido; la moderacion por IA (dialogo real, censura) corre en
-//   segundo plano. Aun NO visible en el feed.
-// - ready: aprobado; visible en el feed "Estamos charlando".
-// - rejected: rechazado por la moderacion POR CONTENIDO (la IA dictamino que el
-//   contenido no es valido). No visible. Se borran los archivos de S3.
-// - failed: fallo TECNICO de la moderacion (red/S3/ffmpeg/OpenAI/timeout/JSON).
-//   NO es un veredicto de contenido: se conservan los archivos de S3 para poder
-//   reprocesar/reintentar. No visible en el feed.
+// Audio moderation/processing state.
+// - processing: uploaded, AI moderation runs in background; not in feed yet.
+// - ready: approved and visible in the feed.
+// - rejected: content rejected by moderation; files removed from S3.
+// - failed: TECHNICAL moderation failure (network/S3/ffmpeg/OpenAI/timeout).
+//   Not a content verdict: files are kept so it can be reprocessed.
 export const ENUM_AUDIO_MODERATION_STATUS = {
     PROCESSING: 'processing',
     READY: 'ready',
@@ -28,7 +25,7 @@ export interface IAudio {
     cover_image: string;
     tags: string[];
     totalPlay: number;
-    trendingScore: number; // E1: score de "lo que sube", recomputado por el sweep
+    trendingScore: number; // "what's rising" score, recomputed by the sweep
     duration: number;
     totalRating: number;
     ratingCount: number;
@@ -46,9 +43,8 @@ export interface IAudioRating {
     rating: number;
 }
 
-// Sistema de feedback del oyente: un unico documento por (audio, usuario) que
-// combina un comentario de texto opcional y/o "feeling tags" (que le hizo sentir
-// el audio). El upsert garantiza una sola opinion por usuario y audio.
+// Listener feedback: one document per (audio, user) combining an optional text
+// comment and/or feeling tags. The upsert guarantees one opinion per user/audio.
 export interface IAudioComment {
     _id?: Types.ObjectId;
     audio: Types.ObjectId;
@@ -59,15 +55,14 @@ export interface IAudioComment {
     updatedAt?: Date;
 }
 
-// E0: evento de escucha CALIFICADA. Registra que un usuario escuchó DE VERDAD un
-// audio (≥30s o ≥40%), deduplicado por (audio, oyente, día). Es la materia prima
-// del descubrimiento/ranking honesto (E1) y lo que hace real el `totalPlay`.
+// QUALIFIED listen event: a real listen (>=30s or >=40%), deduped by
+// (audio, listener, day). Source of honest discovery/ranking and of `totalPlay`.
 export interface IAudioListen {
     audio: Types.ObjectId;
     listener: Types.ObjectId;
     completion: number; // 0..1
     secondsListened: number;
-    dayBucket: string; // 'YYYY-MM-DD' (UTC) — clave de dedupe diario
+    dayBucket: string; // 'YYYY-MM-DD' (UTC) — daily dedupe key
     createdAt?: Date;
     updatedAt?: Date;
 }

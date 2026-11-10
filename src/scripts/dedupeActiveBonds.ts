@@ -1,13 +1,9 @@
-/* Limpieza única de vínculos ACTIVOS duplicados (mismo user + offer + want).
+/* One-time cleanup of duplicate ACTIVE links (same user + offer + want). Required
+ * BEFORE the new partial unique index on { user, offer, want } can build: existing
+ * duplicates make it fail with E11000. Groups exact duplicates (same bytes as the
+ * index), keeps the OLDEST and deletes the rest. Idempotent.
  *
- * Necesario ANTES de que se construya el nuevo índice único parcial sobre
- * { user, offer, want } (bondRequest.model.ts): si ya existen duplicados
- * activos, la construcción del índice falla (E11000). Este script agrupa los
- * duplicados EXACTOS (mismos bytes, igual que el índice), conserva el MÁS
- * VIEJO de cada grupo y borra el resto. Idempotente: correrlo dos veces no
- * hace nada la segunda vez.
- *
- * Uso (una sola vez, tras compilar): node dist/scripts/dedupeActiveBonds.js
+ * Usage (once, after compiling): node dist/scripts/dedupeActiveBonds.js
  */
 import mongoose from 'mongoose';
 import config from '../app/config';
@@ -19,7 +15,7 @@ const main = async (): Promise<void> => {
     // eslint-disable-next-line no-console
     console.log('[dedupe] DB connected');
 
-    // Grupos de bonds activos con (user, offer, want) idénticos y más de uno.
+    // Active bond groups with identical (user, offer, want) and more than one member.
     const groups = await BondRequest.aggregate([
         {
             $match: {
@@ -27,7 +23,7 @@ const main = async (): Promise<void> => {
                 isLinked: { $ne: true },
             },
         },
-        { $sort: { createdAt: 1 } }, // el más viejo primero → se conserva
+        { $sort: { createdAt: 1 } }, // oldest first → kept
         {
             $group: {
                 _id: { user: '$user', offer: '$offer', want: '$want' },
@@ -43,7 +39,7 @@ const main = async (): Promise<void> => {
 
     let removed = 0;
     for (const g of groups as Array<{ ids: mongoose.Types.ObjectId[] }>) {
-        const [, ...toDelete] = g.ids; // conserva ids[0] (el más viejo)
+        const [, ...toDelete] = g.ids; // keep ids[0] (the oldest)
         if (toDelete.length) {
             const res = await BondRequest.deleteMany({ _id: { $in: toDelete } });
             removed += res.deletedCount || 0;

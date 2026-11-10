@@ -25,8 +25,7 @@ const verifyCode = catchAsync(async (req, res) => {
         req?.body?.email,
         req?.body?.verifyCode
     );
-    // Al verificar el OTP se emite sesión (access + refresh).
-    // Seteamos tanto access token como refresh token en cookies HttpOnly para el browser.
+    // Verification starts a session: set access + refresh cookies for the browser.
     if ((result as any)?.accessToken || (result as any)?.refreshToken) {
         setAuthCookies(res, {
             accessToken: (result as any)?.accessToken,
@@ -75,9 +74,8 @@ const deleteUserAccount = catchAsync(async (req, res) => {
         req.user,
         req.body.password
     );
-    // Higiene: la cuenta ya no existe, la cookie HttpOnly de refresh tampoco debe
-    // quedar. Siempre es AUTOborrado (auth(USER_ROLE.user) + borra por el id del
-    // propio JWT), así que nunca desloguea a un tercero.
+    // Clear the refresh cookie since the account is gone. Always a self-delete,
+    // so this never logs out a third party.
     clearRefreshCookie(res);
 
     sendResponse(res, {

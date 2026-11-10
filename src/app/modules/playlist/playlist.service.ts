@@ -12,27 +12,23 @@ import Playlist from './playlist.model';
 import Audio from '../audio/audio.model';
 import { getBlockedObjectIdsFor } from '../userBlock/userBlock.service';
 
-// Moderación: al leer una playlist SOLO se muestran audios aprobados y no
-// bloqueados. Sin esto una playlist reexponía audios en 'processing'/'rejected'
-// o bloqueados por un admin (bypass de moderación vía referencia). El feed ya
-// filtra por esto; las playlists deben aplicar el MISMO criterio.
+// Moderation: a playlist only exposes approved, non-blocked audios; without
+// this it re-exposed processing/rejected/admin-blocked audios by reference.
+// Same criterion the feed applies.
 const AUDIO_VISIBLE_MATCH = {
     moderationStatus: ENUM_AUDIO_MODERATION_STATUS.READY,
     isBlocked: { $ne: true },
 };
 
-// Allowlist de campos ordenables. `sortBy` viene del cliente y se usaba CRUDO
-// como clave del `$sort`: un `?sortBy=a&sortBy=b` llega como array, se convierte
-// en la clave `'a,b'` y Mongo rechaza el FieldPath → 500. Con la allowlist, un
-// campo desconocido cae al orden por defecto en vez de romper.
+// Sortable-field allowlist. Raw `sortBy` was used as a $sort key, and an array
+// (`?sortBy=a&sortBy=b`) became the key 'a,b' → Mongo rejects the FieldPath →
+// 500. Unknown fields now fall back to the default order.
 const PLAYLIST_SORT_FIELDS = new Set(['createdAt', 'updatedAt', 'name']);
 
 
-// Filtra una lista de audioIds a SÓLO los que el usuario puede ver: aprobados
-// (READY), no bloqueados por admin, y cuyo dueño no esté en relación de bloqueo
-// (en cualquier sentido) con el usuario. Se usa al crear/editar playlists para
-// que no se guarden por referencia audios que no deberían ser visibles con sólo
-// conocer el id. Devuelve ObjectId[] (el orden no se preserva; no es relevante).
+// Narrows audioIds to what the user can see: READY, not admin-blocked, owner
+// not in a block relation (either way). Keeps hidden audios from being saved by
+// id on create/update. Returns ObjectId[] (order not preserved, irrelevant).
 const filterVisibleAudioIds = async (
     userId: string,
     audioIds: unknown
@@ -54,10 +50,8 @@ const filterVisibleAudioIds = async (
 
 // Create Playlist
 const createPlaylist = async (userId: string, payload: IPlaylist) => {
-    // Sólo se guardan audios que el usuario efectivamente puede ver (aprobados, no
-    // bloqueados por admin, y de gente que no está en relación de bloqueo). Antes
-    // se guardaba `payload.audios` crudo: con sólo conocer el id se metían en una
-    // playlist audios no visibles.
+    // Only save audios the user can actually see; raw payload.audios let anyone
+    // add hidden audios to a playlist knowing just the id.
     const visibleAudioIds = await filterVisibleAudioIds(userId, payload.audios);
     if (visibleAudioIds.length === 0) {
         throw new AppError(
@@ -65,8 +59,8 @@ const createPlaylist = async (userId: string, payload: IPlaylist) => {
             'At least one valid, visible audio is required'
         );
     }
-    // Allowlist (anti mass-assignment, consistente con el update): solo campos de
-    // contenido del cliente; `user` se fuerza y jamás viene del body.
+    // Allowlist (anti mass-assignment, as in update): only client content
+    // fields; `user` is forced and never taken from the body.
     const result = await Playlist.create({
         name: payload.name,
         description: payload.description,
@@ -104,30 +98,23 @@ const createPlaylist = async (userId: string, payload: IPlaylist) => {
 // };
 
 const getAllPlaylists = async (query: any, userId: string) => {
-    // `userId` sólo alimenta el filtro de bloqueo y el flag `isMyPlaylist`, así que
-    // una sesión sin profileId usable NO justifica cortar con 400: este endpoint
-    // devolvía 200 con la lista pública y así se conserva. Se degrada elegante,
-    // igual que `getPlaylistById` con su viewer. (Ojo: `profileId: null` es el
-    // DEFAULT del schema de User, no un caso exótico.) Lo que sí hay que evitar es
-    // el `new ObjectId(<inválido>)` de más abajo: tira BSONError, que no es
-    // CastError y por lo tanto NINGUNA rama del globalErrorHandler atrapa → 500.
+    // `userId` only feeds the block filter and isMyPlaylist, so a session without
+    // a usable profileId degrades to the public list (as before), not 400. Avoids
+    // `new ObjectId(<invalid>)` → BSONError, uncaught by globalErrorHandler → 500.
     const viewerId = mongoose.Types.ObjectId.isValid(String(userId || ''))
         ? String(userId)
         : null;
-    // Antes: `parseInt(...) || 1`. Con `?page=-3` daba skip NEGATIVO y Mongo
-    // rechaza el `$skip` → 500. Igual con `?limit=-5`. Se reusa el helper común
-    // (ya testeado) en vez de duplicar el clamp acá.
+    // `parseInt(...) || 1` gave a NEGATIVE skip for ?page=-3 (same for ?limit=-5),
+    // and Mongo rejects $skip → 500. Reuse the shared clamp helpers.
     const page = clampPage(query.page);
     const limit = clampLimit(query.limit, 10, 100);
     const skip = (page - 1) * limit;
 
     const matchStage: any = {};
 
-    // Bloqueo: ocultar las playlists de usuarios con los que hay relación de
-    // bloqueo (en cualquier sentido). Era la ÚNICA superficie pública que no lo
-    // aplicaba — el feed de audios, el buscador, los chats, los mensajes y las
-    // notificaciones sí lo hacen. Alguien a quien bloqueaste te seguía apareciendo
-    // acá con su nombre y su foto.
+    // Block: hide playlists of users with a block relation (either way). This was
+    // the only public surface ignoring it; a blocked user still showed up here
+    // with name and photo.
     const blockedObjectIds = viewerId
         ? await getBlockedObjectIdsFor(viewerId)
         : [];
@@ -165,9 +152,8 @@ const getAllPlaylists = async (query: any, userId: string) => {
         },
         { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
 
-        // populate audios (solo aprobados y no bloqueados — mismo criterio que el
-        // feed; una playlist no debe reexponer audios en moderación/rechazados/
-        // bloqueados por referencia).
+        // populate audios: only approved and non-blocked, same criterion as the
+        // feed (a playlist must not re-expose audios under moderation).
         {
             $lookup: {
                 from: 'audios', // collection name for Audio
@@ -179,11 +165,9 @@ const getAllPlaylists = async (query: any, userId: string) => {
                             moderationStatus:
                                 ENUM_AUDIO_MODERATION_STATUS.READY,
                             isBlocked: { $ne: true },
-                            // Bloqueo entre usuarios: ocultar también los audios
-                            // cuyo dueño está bloqueado (o me bloqueó). El filtro de
-                            // arriba (matchStage.user) sólo tapa la playlist del
-                            // dueño bloqueado; un audio ajeno referenciado dentro de
-                            // una playlist visible se colaba igual.
+                            // Also hide audios of blocked owners: matchStage.user
+                            // only hides the owner's playlist, so a referenced
+                            // audio still slipped through.
                             ...(blockedObjectIds.length
                                 ? { user: { $nin: blockedObjectIds } }
                                 : {}),
@@ -200,9 +184,9 @@ const getAllPlaylists = async (query: any, userId: string) => {
                 isMyPlaylist: {
                     $cond: {
                         if: {
-                            // Sin viewer usable: `$eq` contra null nunca matchea un
-                            // ObjectId → isMyPlaylist queda false para todas, que es
-                            // exactamente lo correcto para una sesión sin perfil.
+                            // No usable viewer: $eq against null never matches an
+                            // ObjectId, so isMyPlaylist stays false — correct for a
+                            // session without profile.
                             $eq: [
                                 '$user._id',
                                 viewerId
@@ -271,7 +255,6 @@ const getAllPlaylists = async (query: any, userId: string) => {
         result: data[0]?.result || [],
     };
 };
-// Get All Playlists with QueryBuilder
 const getMyPlaylists = async (
     userId: string,
     query: Record<string, unknown>
@@ -300,12 +283,9 @@ const getMyPlaylists = async (
 
 // Get Playlist by ID
 const getPlaylistById = async (playlistId: string, viewerId?: string) => {
-    // Bloqueo entre usuarios: si el que mira está en relación de bloqueo (en
-    // cualquier sentido) con el dueño de la playlist, ésta "no existe" para él
-    // (404). Y los audios internos de dueños bloqueados se ocultan (mismo criterio
-    // que el feed y getAllPlaylists). Antes esta función no recibía el viewer, así
-    // que no aplicaba bloqueo alguno: con el id se veía la playlist del que te
-    // bloqueó y sus audios.
+    // Block: if the viewer has any block relation with the owner, the playlist
+    // "does not exist" (404), and audios of blocked owners are hidden (same
+    // criterion as the feed). No viewer used to be passed, so no block applied.
     const blockedObjectIds = viewerId
         ? await getBlockedObjectIdsFor(viewerId)
         : [];
@@ -342,11 +322,8 @@ const updatePlaylist = async (
     if (!playlist) {
         throw new AppError(httpStatus.NOT_FOUND, 'Playlist not found');
     }
-    // MASS-ASSIGNMENT (allowlist): antes se hacía findByIdAndUpdate(id, payload) con
-    // el body ENTERO, y como validateRequest NO recorta, el dueño podía mandar
-    // `user: <otroId>` y TRANSFERIR la propiedad de la playlist (o corromper campos
-    // internos). Solo se aceptan los campos editables por el usuario; `user` jamás
-    // viene del body.
+    // Allowlist (anti mass-assignment): sending the whole body let the owner
+    // pass `user: <otherId>` and transfer ownership. `user` never from body.
     const ALLOWED_UPDATE_FIELDS = [
         'name',
         'description',
@@ -361,8 +338,7 @@ const updatePlaylist = async (
         }
     }
 
-    // Si se actualizan los audios, filtrarlos a los visibles para el usuario
-    // (mismo criterio que create): no meter por referencia audios ocultos.
+    // When audios change, filter them to visible ones (same as create).
     if ((safePayload as any).audios !== undefined) {
         const visibleAudioIds = await filterVisibleAudioIds(
             userId,
@@ -377,10 +353,9 @@ const updatePlaylist = async (
         (safePayload as any).audios = visibleAudioIds;
     }
 
-    // Guard "hay algo para actualizar": el `.refine` del schema se sacó porque
-    // corría ANTES de que el controller inyectara la portada subida (un update
-    // sólo-con-archivo llegaba con body vacío y era rechazado). Acá el payload ya
-    // trae `cover_image` si se subió un archivo, así que éste es el punto correcto.
+    // Guard: the schema .refine ran before the controller injected the uploaded
+    // cover, so a file-only update arrived with an empty body. Here cover_image
+    // is already set.
     if (Object.keys(safePayload).length === 0) {
         throw new AppError(
             httpStatus.BAD_REQUEST,
@@ -402,10 +377,9 @@ const updatePlaylist = async (
 };
 
 // Delete Playlist
-// La ruta permite user/admin/superAdmin. Un admin puede borrar CUALQUIER playlist
-// (moderación); un usuario común sólo la suya. Antes el service exigía dueño
-// (`{ user, _id }`) siempre, así que un admin —que además no tiene profileId de
-// NormalUser— recibía 404 y la acción de moderación quedaba rota.
+// Route allows user/admin/superAdmin: an admin may delete ANY playlist
+// (moderation), a regular user only their own. The old owner-only filter made
+// admins (no NormalUser profileId) get 404 and broke moderation.
 const deletePlaylist = async (
     userId: string,
     playlistId: string,

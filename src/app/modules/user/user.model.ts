@@ -52,7 +52,7 @@ const userSchema = new Schema<TUser>(
         codeExpireIn: {
             type: Date,
         },
-        // C2 hardening: contador de intentos fallidos de OTP + lockout temporal.
+        // C2 hardening: failed OTP attempt counter + temporary lockout.
         verifyAttempts: {
             type: Number,
             default: 0,
@@ -61,7 +61,7 @@ const userSchema = new Schema<TUser>(
             type: Date,
             default: null,
         },
-        // Idem para el OTP de RESET de contraseña (lockout por cuenta, no solo por IP).
+        // Same for the password RESET OTP (lockout per account, not just per IP).
         resetAttempts: {
             type: Number,
             default: 0,
@@ -89,8 +89,8 @@ const userSchema = new Schema<TUser>(
 userSchema.pre('save', async function (next) {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const user = this;
-    // Solo re-hashear si la contrasena cambio; si no, cualquier .save() futuro
-    // (p.ej. actualizar otro campo) volveria a hashear el hash y romperia el login.
+    // Re-hash only when the password changed; otherwise any later .save() (e.g. another
+    // field) would hash the hash and break login.
     if (!user.isModified('password')) return next();
     user.password = await bcrypt.hash(
         user.password,
@@ -103,13 +103,11 @@ userSchema.post('save', function (doc, next) {
     doc.password = '';
     next();
 });
-// statics method for check is user exists (por EMAIL: el único caller —
-// admin.services — le pasa un email, pero antes consultaba por `phoneNumber`,
-// así que el findOne nunca matcheaba. Bug latente: se consulta por email).
+// Checks existence by EMAIL: the only caller (admin.services) passes an email; it used
+// to query `phoneNumber` and never matched.
 userSchema.statics.isUserExists = async function (email: string) {
     return await User.findOne({ email }).select('+password');
 };
-// statics method for check password match  ----
 userSchema.statics.isPasswordMatched = async function (
     plainPasswords: string,
     hashPassword: string
@@ -127,18 +125,14 @@ userSchema.statics.isJWTIssuedBeforePasswordChange = async function (
     return passwordChangeTime > jwtIssuedTimeStamp;
 };
 
-// ESCALA. El cron de limpieza de altas incompletas (user.services.ts, cada 2
-// minutos) consulta `{ isVerified:false, codeExpireIn:{$lte}, createdAt:{$gte} }`,
-// y esta colección NO tenía más índice que el único de `email`. Sin este, esa
-// consulta es un ESCANEO DE COLECCIÓN COMPLETA cada 2 minutos, para siempre: con
-// 46 usuarios no se nota y con 100.000 es el cron más caro del sistema.
-// Compuesto con la igualdad primero y el rango después, que es el orden que
-// Mongo puede aprovechar. `createdAt` NO se agrega: es un SEGUNDO rango y el
-// índice no lo usaría para acotar; con `isVerified` + `codeExpireIn` la porción
-// escaneada ya es diminuta (solo cuentas sin verificar y vencidas).
+// SCALE. The incomplete-signup cleanup cron (user.services.ts, every 2 min) queries
+// `{ isVerified:false, codeExpireIn:$lte, createdAt:$gte }` and this collection had no
+// index but the unique one on `email`: without this it's a full collection scan forever.
+// Equality first, range last. `createdAt` is not added: it's a second range and the
+// `isVerified` + `codeExpireIn` slice is already tiny.
 userSchema.index({ isVerified: 1, codeExpireIn: 1 });
-// Los baneados por admin (`isBlocked: true`) se excluyen en cada carga: Personas
-// con `distinct('_id', …)` y el buscador con `distinct('profileId', …)`.
+// Admin-banned users (`isBlocked: true`) are excluded on every load: People uses
+// `distinct('_id', ...)` and search uses `distinct('profileId', ...)`.
 userSchema.index({ isBlocked: 1 });
 
 export const User = model<TUser, UserModel>('User', userSchema);

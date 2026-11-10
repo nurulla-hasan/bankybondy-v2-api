@@ -1,13 +1,12 @@
-/* Reutilización del checkout pendiente de suscripción.
+/* Reuse of the pending subscription checkout.
  *
- * El checkout de PayPal/MercadoPago se crea por request. Sin memoria, dos
- * pestañas o un doble submit producen DOS URLs pagables del mismo plan y la
- * persona puede pagar las dos (la suscripción es de por vida: no hay renovación
- * que lo corrija después).
+ * The PayPal/MercadoPago checkout is created per request. Without memory, two
+ * tabs or a double submit produce TWO payable URLs for the same plan and the
+ * person can pay both (the subscription is lifetime: no renewal fixes it).
  *
- * Acá vive la decisión pura: cuándo se puede reutilizar la URL guardada y cuándo
- * se puede reclamar el documento para crear una nueva. El filtro de `claim` es
- * la autoridad atómica; estas funciones existen para testear esa lógica sin base.
+ * The pure decision lives here: when the stored URL can be reused and when the
+ * doc can be claimed to create a new one. The `claim` filter is the atomic
+ * authority; these functions exist to test that logic without a DB.
  */
 import type { FilterQuery } from 'mongoose';
 import type { INormalUser } from './normalUser.interface';
@@ -22,16 +21,16 @@ export interface CheckoutPendiente {
     createdAt?: Date;
 }
 
-/** Una URL se reutiliza 30 minutos: suficiente para terminar un pago y corto
- *  para que un checkout abandonado no quede pagable para siempre. */
+/** A URL is reused for 30 minutes: enough to finish a payment, short enough that
+ *  an abandoned checkout does not stay payable forever. */
 export const TTL_REUSO_MS = 30 * 60_000;
 
-/** Un reclamo con `url: ''` es “estoy creando la orden”. Si se cayó el proceso
- *  en el medio, a los 30 s otro request puede tomarlo; antes de eso, no, porque
- *  pisarlo crearía exactamente la segunda URL que esto viene a evitar. */
+/** A claim with `url: ''` means "I am creating the order". If the process died
+ *  mid-way, after 30 s another request may take it; before that, no, because
+ *  overwriting it would create exactly the second URL this avoids. */
 export const STALE_CLAIM_MS = 30_000;
 
-/** `provider` es opcional en la API y su ausencia significa PayPal. */
+/** `provider` is optional in the API and its absence means PayPal. */
 export const normalizarProveedor = (
     provider: string | undefined
 ): ProveedorCheckout =>
@@ -48,15 +47,15 @@ export const esCheckoutReutilizable = (
     return ahora - pending.createdAt.getTime() < TTL_REUSO_MS;
 };
 
-/** Condiciones bajo las que el documento puede pasar a ser el checkout vigente.
+/** Conditions for the doc to become the current checkout.
  *
- *  Lo que NO matchea (y por eso devuelve 409 en el servicio) es el caso normal
- *  de una pestaña que llega mientras otra ya tiene un checkout fresco del mismo
- *  plan y proveedor: ahí no hay nada que crear, hay una URL que devolver.
+ *  A non-match (409 in the service) is the normal case of a tab arriving while
+ *  another already has a fresh checkout of the same plan and provider: nothing
+ *  to create, just a URL to return.
  *
- *  `$ne` e `$in: [null, '']` matchean paths ausentes, así que las ramas de
- *  “campo faltante” son defensivas; la de `url: ''` sí exige antigüedad, que es
- *  lo que impide robar un reclamo vivo. */
+ *  `$ne` and `$in: [null, '']` match absent paths, so the "missing field"
+ *  branches are defensive; the `url: ''` branch requires age, which is what
+ *  prevents stealing a live claim. */
 export const construirFiltroClaim = (
     plan: TipoPlan,
     provider: ProveedorCheckout,

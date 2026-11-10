@@ -13,14 +13,9 @@ import { User } from '../user/user.model';
 import { IAdmin } from './admin.interface';
 import Admin from './admin.model';
 
-// register Admin
 const createAdmin = async (payload: IAdmin & { password: string }) => {
     const { password } = payload;
-    // Antes: `const { password, ...adminData } = payload` → TODO lo que mandara el
-    // cliente entraba al `Admin.create` (incluidos `_id`, `user`, `isDeleted`).
-    // Verificado con mongoose contra el schema: `new Admin({isDeleted:true,_id:...})`
-    // conserva ambos, o sea que el cliente podía elegir su propio _id. Whitelist
-    // explícita de los únicos campos que este alta necesita.
+    // Explicit whitelist: spreading payload let the client set _id, user or isDeleted.
     const adminData: Partial<IAdmin> = {
         name: payload.name,
         email: payload.email,
@@ -73,14 +68,8 @@ const updateAdminProfile = async (
     id: string,
     payload: Partial<IAdmin> & { password: string }
 ) => {
-    // Confirmar que el `:id` ES un Admin ANTES de escribir nada. El orden viejo
-    // (escribir el password y recién después buscar el Admin) tenía una rareza: con
-    // un id que no es un Admin pero sí es el `profileId` de algún User —por ejemplo
-    // el del SuperAdmin— se le cambiaba la contraseña y la respuesta igual era 200
-    // "Admin profile updated successfully" con `data: null`. Era un no-op silencioso
-    // y ahora, con el `passwordChangedAt` de abajo, pasaría a ser un DESLOGUEO
-    // silencioso. No es alcanzable desde el panel, pero un write que miente sobre a
-    // quién tocó no se deja pasar.
+    // Check the `:id` IS an Admin before writing: the old order could change the
+    // password of a User whose profileId matched, then answer 200 with data: null.
     const admin = await Admin.findById(id).select('_id');
     if (!admin) {
         throw new AppError(httpStatus.NOT_FOUND, 'Admin not found');
@@ -95,26 +84,14 @@ const updateAdminProfile = async (
             { profileId: id },
             {
                 password: hashedPassword,
-                // Sin esto, cambiarle la contraseña a un admin NO cerraba sus
-                // sesiones: `middlewares/auth.ts` invalida los tokens comparando
-                // `passwordChangedAt` contra el `iat` del token, y acá nunca se
-                // seteaba. O sea que el token viejo seguía válido hasta expirar
-                // (hasta 30 días) — justo en el escenario donde uno le cambia la
-                // contraseña a un admin: porque sospecha que la cuenta está
-                // comprometida. El cambio normal (auth.services) y el reset SÍ lo
-                // setean; había quedado sin cerrar sólo el camino administrativo.
+                // Required: auth middleware compares this against token iat, so
+                // without it an admin password change left old sessions alive.
                 passwordChangedAt: new Date(),
             }
         );
     }
-    // El email es IDENTIDAD: el login usa `User.email`, no `Admin.email`. Escribir
-    // sólo el segundo (lo que hacía este endpoint) DESINCRONIZA el login. Por eso
-    // queda fuera de la whitelist de abajo. Pero dejarlo caer en silencio es peor
-    // para el operador: el `EditAdminModal` lo manda SIEMPRE (campo requerido) y el
-    // dashboard cierra el modal mostrando "actualizado" aunque no se haya guardado.
-    // Solución: sólo se rechaza si de verdad INTENTA cambiarlo. Mandarlo igual —el
-    // 99% de los submits— pasa sin ruido. (ChatGPT tiraba 400 ante CUALQUIER email
-    // presente, lo que habría roto el 100% de las ediciones.)
+    // Email is identity (login uses User.email): reject only a real attempt to change
+    // it, because the edit modal always submits the field.
     if (payload.email) {
         const actual = await Admin.findById(id).select('email').lean();
         if (actual && payload.email !== actual.email) {
@@ -125,9 +102,8 @@ const updateAdminProfile = async (
         }
     }
 
-    // Defensa en profundidad: `validateRequest` valida contra Zod pero NO reemplaza
-    // `req.body` por el objeto parseado, así que campos extra siguen llegando acá.
-    // Solo se aceptan los editables (nada de `user`, `isDeleted`, `_id`, `email`).
+    // Depth defense: validateRequest doesn't replace req.body, so extra fields still
+    // arrive; accept only the editable ones (no user, isDeleted, _id, email).
     const safePayload: Partial<IAdmin> = {};
     for (const key of ['name', 'phoneNumber', 'profile_image'] as const) {
         if (payload[key] !== undefined) safePayload[key] = payload[key];
@@ -151,7 +127,6 @@ const deleteAdminFromDB = async (id: string) => {
             throw new AppError(httpStatus.NOT_FOUND, 'Admin not found');
         }
 
-        // Delete associated User and Admin within the transaction
         await User.findByIdAndDelete(admin.user).session(session);
         await Admin.findByIdAndDelete(id).session(session);
 
@@ -159,13 +134,11 @@ const deleteAdminFromDB = async (id: string) => {
         return null;
     } catch (error) {
         await session.abortTransaction();
-        throw error; // re-throw the error for further handling
+        throw error;
     } finally {
         session.endSession();
     }
 };
-
-// get all Admin
 
 const getAllAdminFromDB = async (query: Record<string, any>) => {
     const AdminQuery = new QueryBuilder(

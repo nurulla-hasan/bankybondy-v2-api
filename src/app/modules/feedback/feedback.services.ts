@@ -8,8 +8,8 @@ import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
 import sendNotification from '../../helper/sendNotification';
 
 const createFeedBack = async (userId: string, payload: IFeedback) => {
-    // Whitelist: NO esparcir el body (validateRequest no recorta) → un usuario
-    // podía inyectar campos internos/admin como `replyMessage`/`replyBy`.
+    // Whitelist: do NOT spread the body (validateRequest doesn't trim it) — a user
+    // could inject internal/admin fields like `replyMessage`/`replyBy`.
     const result = await Feedback.create({
         name: payload.name,
         description: payload.description,
@@ -34,7 +34,6 @@ const getAllFeedback = async (query: Record<string, any>) => {
     };
 };
 
-// reply feed back
 const replyFeedback = async (id: string, replyMessage: string) => {
     const feedback = await Feedback.findById(id);
     if (!feedback) {
@@ -59,7 +58,6 @@ const replyFeedback = async (id: string, replyMessage: string) => {
     return result;
 };
 
-// delete feedback
 const deleteFeedbackFromDB = async (id: string) => {
     const result = await Feedback.findByIdAndDelete(id);
     return result;

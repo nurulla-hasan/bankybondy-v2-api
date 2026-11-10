@@ -1,8 +1,8 @@
-/* Verifica que el índice único PARCIAL {sender,receiver} status:Pending de
- * FriendRequest haya quedado CREADO en la base (autoIndex de Mongoose lo
- * construye al arrancar el proceso, y si falla lo hace EN SILENCIO). Solo lee.
+/* Verifies that the PARTIAL unique index {sender,receiver} status:Pending on
+ * FriendRequest was actually CREATED (Mongoose autoIndex builds it on startup and
+ * fails SILENTLY). Read-only.
  *
- * Uso (tras compilar y reiniciar la API):
+ * Usage (after compiling and restarting the API):
  *   node dist/scripts/checkFriendRequestIndexes.js
  */
 import mongoose from 'mongoose';

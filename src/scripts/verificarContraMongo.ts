@@ -1,39 +1,10 @@
 /* eslint-disable no-console */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* VERIFICACIÓN CONTRA UNA BASE REAL — lo que los 275 tests NO pueden probar.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * POR QUÉ EXISTE
- *
- * El gate corre 275 tests y todos son de FUNCIONES PURAS: aritmética del scoring,
- * clamps, políticas. Ninguno toca la base. Y esta tanda cambió, sobre todo,
- * CONSULTAS: la forma del filtro del sweep, un índice nuevo, una guarda que vive
- * en el filtro de un `updateOne`, una migración, y semántica de MongoDB que se
- * razonó pero nunca se ejecutó.
- *
- * Esa distinción no es teórica: en esta misma tanda, el defecto más grave del
- * motor fue exactamente eso — `{ matchesGen: 0 }` NO matchea un campo ausente.
- * Se razonó mal, el typecheck no lo ve, los 275 tests no lo ven, y habría matado
- * el matcheo de fondo el día del deploy. Este archivo es la red para esa clase.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * CÓMO SE CORRE
- *
- *   # contra un Mongo efímero que se levanta y se tira solo (necesita
- *   # `npm i --no-save mongodb-memory-server`):
- *   node dist/scripts/verificarContraMongo.js
- *
- *   # o contra un Mongo de verdad (staging, el entorno de carga, NUNCA producción):
- *   VERIFY_MONGO_URL=mongodb://host/bankybondy-verify-descartable VERIFY_MONGO_BORRAR=si-esta-base-es-descartable node dist/scripts/verificarContraMongo.js
- *
- * NO se agrega al gate: el gate tiene que poder correr sin infraestructura. Esto
- * se corre ANTES DE CADA DEPLOY que toque consultas, y en el entorno de carga.
- *
- * Sale con código 1 si algo falla, así que encadena en un script.
- */
+/* Verifies queries and Mongo semantics this batch relies on, which the pure-function
+ * tests cannot cover. Run before each deploy touching queries; exits 1 on failure. */
 import mongoose from 'mongoose';
 
-// Los modelos y la lógica REAL, no copias.
+// Real models and logic, not copies.
 import BondRequest from '../app/modules/bondRequest/bondRequest.model';
 import NormalUser from '../app/modules/normalUser/normalUser.model';
 import Transaction from '../app/modules/transaction/transaction.model';
@@ -60,7 +31,7 @@ const chequear = (nombre: string, condicion: boolean, detalle?: string) => {
 
 const oid = () => new mongoose.Types.ObjectId();
 
-/** Un vínculo mínimo que pasa las validaciones del modelo. */
+/** A minimal bond that passes model validation. */
 const bondBase = (extra: Record<string, unknown> = {}) => ({
     user: oid(),
     offer: 'clases de guitarra',
@@ -70,15 +41,15 @@ const bondBase = (extra: Record<string, unknown> = {}) => ({
     ...extra,
 });
 
-// ── 1. La semántica de Mongo que casi nos cuesta el matcheo de fondo ────────
+// ── 1. The Mongo semantics that nearly cost us background matching ─────────
 const grupoSemanticaDeAusentes = async () => {
     console.log('\n── Semántica de campos AUSENTES (la clase del bug de matchesGen)');
     const col = mongoose.connection.collection('probaAusentes');
     await col.deleteMany({});
     const idSin = oid();
     const idCon = oid();
-    // Se insertan por el DRIVER, no por mongoose: así el documento queda de
-    // verdad SIN el campo, igual que un documento legado.
+    // Inserted through the DRIVER, not mongoose, so the document truly lacks
+    // the field, like a legacy one.
     await col.insertMany([
         { _id: idSin as any, nombre: 'sin campo' },
         { _id: idCon as any, nombre: 'con cero', matchesGen: 0 },
@@ -109,7 +80,7 @@ const grupoSemanticaDeAusentes = async () => {
     await col.drop().catch(() => undefined);
 };
 
-// ── 2. La consulta del sweep: ¿el índice provee filtro Y ORDEN? ─────────────
+// ── 2. The sweep query: does the index provide filter AND order? ────────────
 const grupoSweep = async () => {
     console.log('\n── La consulta del sweep y su índice (el SORT bloqueante)');
     await BondRequest.deleteMany({});
@@ -117,10 +88,10 @@ const grupoSweep = async () => {
 
     const ahora = Date.now();
     await BondRequest.create([
-        bondBase({ matchesNextAt: new Date(ahora - 90_000) }), // vencido hace rato
-        bondBase({ matchesNextAt: agendaVencida() }), // centinela: el más vencido
-        bondBase({ matchesNextAt: new Date(ahora + 3_600_000) }), // futuro: NO va
-        bondBase({ matchesNextAt: agendaVencida(), isPause: true }), // pausado: NO va
+        bondBase({ matchesNextAt: new Date(ahora - 90_000) }), // long overdue
+        bondBase({ matchesNextAt: agendaVencida() }), // sentinel: most overdue
+        bondBase({ matchesNextAt: new Date(ahora + 3_600_000) }), // future: excluded
+        bondBase({ matchesNextAt: agendaVencida(), isPause: true }), // paused: excluded
     ] as any);
 
     const filtro = {
@@ -165,13 +136,13 @@ const grupoSweep = async () => {
     );
 };
 
-// ── 3. La migración de arranque, contra documentos legados de verdad ────────
+// ── 3. The startup migration, against real legacy documents ─────────────────
 const grupoBackfill = async () => {
     console.log('\n── El backfill (contra documentos legados REALES)');
     await BondRequest.deleteMany({});
     const col = mongoose.connection.collection('bondrequests');
     const id = oid();
-    // Documento legado: insertado por el driver, sin los campos nuevos.
+    // Legacy document: inserted by the driver, without the new fields.
     await col.insertOne({
         _id: id as any,
         user: oid(),
@@ -181,7 +152,7 @@ const grupoBackfill = async () => {
         wantVector: [0.2],
         status: ENUM_BOND_REQUEST_STATUS.WAITING_FOR_LINK,
         createdAt: new Date(),
-        updatedAt: new Date(Date.now() - 90 * 86400_000), // 90 días atrás
+        updatedAt: new Date(Date.now() - 90 * 86400_000), // 90 days ago
     } as any);
 
     const antes: any = await col.findOne({ _id: id as any });
@@ -220,7 +191,7 @@ const grupoBackfill = async () => {
         `antes ${antes.updatedAt} / después ${despues.updatedAt}`
     );
 
-    // Idempotencia: correrlo de nuevo no cambia nada.
+    // Idempotency: running it again changes nothing.
     await backfillAgendaMatcheo();
     const tercera: any = await col.findOne({ _id: id as any });
     chequear(
@@ -230,7 +201,7 @@ const grupoBackfill = async () => {
     );
 };
 
-// ── 4. La guarda anti-downgrade, ejecutada de verdad ────────────────────────
+// ── 4. The anti-downgrade guard, actually executed ──────────────────────────
 const grupoAntiDowngrade = async () => {
     console.log('\n── La guarda anti-downgrade (el filtro atómico, ejecutado)');
     await NormalUser.deleteMany({});
@@ -289,14 +260,14 @@ const grupoAntiDowngrade = async () => {
         await aplicar(p2, 'Premium')
     );
 
-    // Documento con el campo AUSENTE, insertado por el driver.
+    // Document with the field ABSENT, inserted by the driver.
     const col = mongoose.connection.collection('normalusers');
     const idSin = oid();
     await col.insertOne({
         _id: idSin as any,
         user: oid(),
         name: 'legado',
-        // email único: la colección tiene un índice unique y dos `null` chocan.
+        // unique email: the collection has a unique index and two nulls collide.
         email: `${idSin}@x.com`,
     } as any);
     chequear(
@@ -304,7 +275,7 @@ const grupoAntiDowngrade = async () => {
         await aplicar(idSin, 'Premium')
     );
 
-    // Valor DESCONOCIDO (enum viejo): es lo que el `$nin` vino a cubrir.
+    // UNKNOWN value (old enum): the case `$nin` was introduced to cover.
     const idRaro = oid();
     await col.insertOne({
         _id: idRaro as any,
@@ -324,7 +295,7 @@ const grupoAntiDowngrade = async () => {
     );
 };
 
-// ── 5. El historial de la palanca: $push + $slice junto con $set ────────────
+// ── 5. The lever history: $push + $slice alongside $set ─────────────────────
 const grupoHistorial = async () => {
     console.log('\n── El historial de la palanca ($push + $slice con $set)');
     await NormalUser.deleteMany({});
@@ -379,7 +350,7 @@ const grupoHistorial = async () => {
     );
 };
 
-// ── 6. La idempotencia del cobro: el índice único de transactionId ──────────
+// ── 6. Charge idempotency: the unique index on transactionId ────────────────
 const grupoTransaccion = async () => {
     console.log('\n── El candado de idempotencia del cobro');
     await Transaction.deleteMany({});
@@ -435,61 +406,38 @@ const main = async () => {
     if (!url) {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { MongoMemoryReplSet } = require('mongodb-memory-server');
-        // REPLICA SET y no standalone: `computeAndCacheMatches` y la creación de
-        // vínculos usan transacciones, que Mongo sólo soporta con replica set.
+        // Replica set, not standalone: `computeAndCacheMatches` and link creation
+        // use transactions, which Mongo only supports on a replica set.
         console.log('Levantando un Mongo efímero (replica set)…');
-        //  generoso: el default de 10 s no alcanza para un arranque
-        // en frío (la primera vez el binario se descarga, y en Windows el arranque
-        // es lento). Sin esto la verificación falla por la razón equivocada.
+        // Generous: the 10 s default is not enough for a cold start (the binary is
+        // downloaded on first run, and startup is slow on Windows).
         memoria = await MongoMemoryReplSet.create({
             replSet: { count: 1 },
             instanceOpts: [{ launchTimeout: 120_000 }],
         });
         url = memoria.getUri();
     } else {
-        // ⚠️ GUARDA DE BORRADO. Esta verificación hace CINCO `deleteMany({})` sobre
-        // `bondrequests`, `normalusers` y `transactions`: vacía la base a la que
-        // apunte. (Hay un sexto, pero es sobre `probaAusentes`, una colección de
-        // juguete que el propio script dropea después.) Con el Mongo efímero eso es inofensivo, pero cuando
-        // `mongodb-memory-server` no está instalado el script fallaba sugiriendo
-        // justamente `VERIFY_MONGO_URL=…`, y en el servidor el único Mongo que el
-        // operador tiene a mano es PRODUCCIÓN. `DEPLOY-metodo.md` manda correr
-        // esto en el servidor: el camino al desastre estaba señalizado.
+        // ⚠️ DELETE GUARD. This run issues five `deleteMany({})` over `bondrequests`,
+        // `normalusers` and `transactions`, so it empties whatever base it points at.
+        // Two locks, both required: the database name must declare itself
+        // disposable, and an explicit confirmation variable must be set.
         //
-        // Dos candados, y hacen falta los dos:
-        //   1. el nombre de la base tiene que declararse descartable, y
-        //   2. una variable de confirmación explícita, que nadie tipea por inercia.
-        // EL NOMBRE DE LA BASE, DERIVADO EN EL ORDEN QUE LO HACE CORRECTO.
-        //
-        // Este parseo se rompió dos veces y cada versión rompió algo distinto, así
-        // que va escrito el porqué de CADA paso:
-        //
-        //   1. sacar el esquema PRIMERO. Sin esto, una URI sin credenciales no
-        //      tiene `@`, y `split('@').pop()` devuelve la cadena ENTERA —con el
-        //      `mongodb://` adelante—, así que el `[1]` cae en la cadena vacía de
-        //      entre las dos barras y el nombre sale VACÍO. Medido: las cuatro
-        //      formas sin credenciales quedaban rechazadas, incluido el comando
-        //      de ejemplo que este mismo archivo imprime.
-        //   2. cortar por `?` ANTES del `@`: un parámetro de query puede traer `@`.
-        //   3. tomar el ÚLTIMO `@`: la contraseña puede traer `@` y hasta `/`.
-        //   4. recién ahí partir por `/`.
-        //
-        // Y la primera versión de todas hacía `url.split('?')[0].split('/').pop()`,
-        // que con el estilo de Atlas (sin barra antes del `?`) devolvía la
-        // AUTORIDAD y la interpolaba en los mensajes: **imprimía usuario y
-        // contraseña del cluster en el log del deploy**. La guarda contra borrar
-        // producción filtraba las credenciales de producción. Por eso, en los
-        // mensajes de estas guardas no se interpola nunca la URI cruda.
+        // Name parsing, order matters (each step broke before):
+        //   1. strip the scheme first, or a credential-less URI yields an empty name;
+        //   2. cut at `?` before `@`, since a query param may contain `@`;
+        //   3. take the LAST `@`, since the password may contain `@` or `/`;
+        //   4. only then split on `/`.
+        // The raw URI is never interpolated into messages: the earlier
+        // `split('?')[0].split('/').pop()` leaked Atlas cluster credentials into
+        // the deploy log.
         const sinEsquema = url.replace(/^mongodb(\+srv)?:\/\//, '');
         const nombreBase = (
             (sinEsquema.split('?')[0].split('@').pop() || '').split('/')[1] || ''
         ).toLowerCase();
         expectedDatabase = nombreBase;
 
-        // `test` NO está en la lista, y es deliberado: es la base POR DEFECTO del
-        // driver, y con el estilo de URI de este repo (las de ejemplo no traen
-        // nombre de base) es exactamente donde viven los usuarios, los vínculos y
-        // las transacciones reales. Bendecirla convertía la guarda en un adorno.
+        // `test` is deliberately excluded: it is the driver default and, with this
+        // repo's URI style, holds the real users, links and transactions.
         const declaradaDescartable =
             /(prueba|verify|efimer|scratch|descartable)/.test(nombreBase);
 
@@ -574,21 +522,11 @@ main().catch((e: any) => {
         );
         process.exit(1);
     }
-    // LA ÚLTIMA FUGA DE CREDENCIALES, y es la que ninguna guarda tapa: si el
-    // driver rechaza la URI, el `MongoParseError` la trae ENTERA adentro del
-    // mensaje, y este catch-all la imprimía en el log del deploy. Se comprobó con
-    // una URI que pasa las tres guardas y aun así hace explotar al driver. Se
-    // enmascara todo lo que haya entre `//` y `@`.
-    //
-    // LA CLASE ES `[^/\s]`, NO `[^@\s]`, y la diferencia es un carácter con dos
-    // consecuencias opuestas, las dos reproducidas contra el parser instalado:
-    //   · con `[^@\s]`, una contraseña que contenga `@` —permitido si va
-    //     codificado, y el driver igual explota— deja la parte posterior al
-    //     primer `@` SIN enmascarar: la contraseña terminaba en el log del deploy.
-    //   · y al revés, SOBRE-enmascaraba: una URI sin credenciales con un `@` en un
-    //     parámetro de query salía como `mongodb://***@b`, o sea que destruía el
-    //     diagnóstico que este catch-all existe para dar.
-    // Parar en `/` arregla las dos: la autoridad termina ahí.
+    // The last credential leak, and no guard covers it: a rejected URI comes back
+    // inside `MongoParseError` with the whole URI, which this catch-all printed.
+    // Mask everything between `//` and `@`. The class is `[^/\s]`, not `[^@\s]`:
+    // stopping at `/` keeps passwords containing `@` masked, without over-masking
+    // credential-less URIs that carry an `@` in a query param.
     const limpio = String(e?.stack || e?.message || e).replace(
         /\/\/[^/\s]*@/g,
         '//***@'

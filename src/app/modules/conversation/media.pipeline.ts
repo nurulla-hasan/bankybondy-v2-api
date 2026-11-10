@@ -1,12 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* Pipeline de la galería de adjuntos de una conversación (PURE: se puede probar
- * sin base de datos, como message.pipeline.ts).
+/* Attachment gallery pipeline for a conversation (PURE: testable without a DB,
+ * like message.pipeline.ts).
  *
- * `urls` es un array plano de strings y sigue siéndolo — la app v1 lo lee tal
- * cual. Lo que no se podía hacer con ese formato: agrupar por día o tocar una
- * foto y saltar al mensaje que la subió, porque el string no dice de qué mensaje
- * salió. Por eso `items` lleva la referencia de vuelta, y `urls` se DERIVA de
- * `items` en vez de ser un segundo camino de datos: así no pueden discrepar.
+ * `urls` stays a flat string array (app v1 reads it as-is), but a string cannot
+ * say which message it came from, so grouping by day or jumping to the message
+ * was impossible. Hence `items` carries the back-reference, and `urls` is
+ * DERIVED from `items` so the two cannot diverge.
  */
 
 export type MediaKind = 'image' | 'video' | 'pdf';
@@ -38,8 +37,8 @@ export const buildMediaGalleryPipeline = ({
     {
         $match: {
             conversationId: conversationObjectId,
-            // La galería NO debe mostrar adjuntos de mensajes BORRADOS ni de
-            // usuarios BLOQUEADOS: el $match por conversación solo no alcanzaba.
+            // The gallery must not show attachments from DELETED messages nor
+            // BLOCKED users: matching by conversation alone was not enough.
             isDeleted: { $ne: true },
             msgByUserId: { $nin: blockedObjectIds },
         },
@@ -84,6 +83,6 @@ export const buildMediaGalleryPipeline = ({
     },
 ];
 
-// El único origen de `urls`: derivado, no recalculado por otro camino.
+// The only source of `urls`: derived, not recomputed by another path.
 export const urlsFromItems = (items: MediaItem[]): string[] =>
     (items ?? []).map((item) => item.url);

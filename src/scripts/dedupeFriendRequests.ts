@@ -1,18 +1,6 @@
-/* Conteo + limpieza de FriendRequest PENDING duplicadas (mismo sender+receiver).
- *
- * Por qué: se quiere un índice único PARCIAL sobre { sender, receiver } con
- * status:Pending (friendRequest.model.ts) para cerrar la carrera pura de
- * doble-tap. Si ya existen duplicados PENDING con el mismo (sender, receiver),
- * la construcción del índice falla (E11000). Este script los detecta y, en modo
- * APPLY, conserva el MÁS VIEJO de cada grupo y borra el resto.
- *
- * SEGURO POR DEFECTO: sin APPLY solo REPORTA (no borra nada). Idempotente.
- *
- * Uso (tras compilar con `npx tsc`, parado en ~/bb-nuevo):
- *   node dist/scripts/dedupeFriendRequests.js          # SOLO CUENTA (read-only)
- *   APPLY=1 node dist/scripts/dedupeFriendRequests.js  # borra los duplicados
- *
- * NO reinicia procesos ni toca el server: es una tarea de una sola vez.
+/* Dedupe PENDING FriendRequests (same sender+receiver) so the partial unique index
+ * can be built. APPLY=1 deletes duplicates keeping the OLDEST; default is read-only.
+ * Usage: node dist/scripts/dedupeFriendRequests.js [APPLY=1]  (one-off, idempotent)
  */
 import mongoose from 'mongoose';
 import config from '../app/config';
@@ -30,7 +18,7 @@ const main = async (): Promise<void> => {
         `[dedupeFR] modo: ${APPLY ? 'APPLY (borra)' : 'READ-ONLY (solo cuenta)'}`
     );
 
-    // Panorama general por estado (informativo).
+    // Overall breakdown by status (informational).
     const total = await FriendRequest.estimatedDocumentCount();
     const byStatus = await FriendRequest.aggregate([
         { $group: { _id: '$status', n: { $sum: 1 } } },
@@ -41,9 +29,9 @@ const main = async (): Promise<void> => {
         console.log(`[dedupeFR]   ${s._id ?? '(sin status)'}: ${s.n}`);
     }
 
-    // Grupos PENDING con (sender, receiver) idénticos y más de uno = lo que
-    // rompería el índice único parcial. Se ordena por createdAt asc: el más
-    // viejo queda primero (es el que se conserva).
+    // PENDING groups with identical (sender, receiver) and more than one doc:
+    // what would break the partial unique index. Sorted by createdAt asc, so the
+    // oldest comes first and is the one kept.
     const groups = await FriendRequest.aggregate([
         { $match: { status: ENUM_FRIEND_REQUEST_STATUS.Pending } },
         { $sort: { createdAt: 1 } },
@@ -68,7 +56,7 @@ const main = async (): Promise<void> => {
     console.log(
         `[dedupeFR] docs PENDING que sobran (se borrarían): ${docsToRemove}`
     );
-    // Muestra los peores 10 para dar contexto (sin exponer nada sensible: solo ids).
+    // Show the worst 10 for context (ids only, nothing sensitive).
     (groups as Array<{ _id: { sender: unknown; receiver: unknown }; n: number }>)
         .slice(0, 10)
         .forEach((g, i) => {
@@ -77,9 +65,8 @@ const main = async (): Promise<void> => {
             );
         });
 
-    // Informativo (NO se borra): pares con PENDING en AMBOS sentidos (A->B y
-    // B->A). El índice único de una dirección no los toca; se listan por si
-    // interesa como dato de producto, pero quedan intactos.
+    // Informational (NOT deleted): pairs PENDING in BOTH directions (A->B and
+    // B->A). The single-direction index leaves them untouched.
     const pendingPairs = await FriendRequest.aggregate([
         { $match: { status: ENUM_FRIEND_REQUEST_STATUS.Pending } },
         { $group: { _id: { sender: '$sender', receiver: '$receiver' } } },
@@ -94,7 +81,7 @@ const main = async (): Promise<void> => {
         const [a, b] = key.split('->');
         if (dirSet.has(`${b}->${a}`)) bidirectional += 1;
     }
-    // Se cuenta cada par dos veces (A->B y B->A), así que se divide.
+    // Each bidirectional pair is counted twice (A->B and B->A), so divide by 2.
     console.log(
         `[dedupeFR] (informativo) pares PENDING en ambos sentidos: ${bidirectional / 2}`
     );
@@ -106,7 +93,7 @@ const main = async (): Promise<void> => {
         return;
     }
 
-    // APPLY: conserva ids[0] (el más viejo) de cada grupo, borra el resto.
+    // APPLY: keep ids[0] (oldest) of each group, delete the rest.
     let removed = 0;
     for (const g of groups as Array<{ ids: mongoose.Types.ObjectId[] }>) {
         const [, ...toDelete] = g.ids;

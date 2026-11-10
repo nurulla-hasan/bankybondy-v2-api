@@ -31,8 +31,8 @@ router.post(
     bondLinkController.markAsCompleteBond
 );
 
-// Rechazar un trueque: lo da por NO CONCRETADO para todos + el que rechaza sale
-// del chat + bloqueo opcional (relativo al rol, nadie se bloquea a sí mismo).
+// Reject a trade: marks it NOT COMPLETED for everyone, the rejecter leaves the
+// chat, plus optional role-relative block (nobody blocks themselves).
 router.post(
     '/reject/:id',
     auth(USER_ROLE.user),

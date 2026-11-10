@@ -6,10 +6,10 @@ export const addRatingValidation = z.object({
         bondLink: z.string({ required_error: 'Bond link id is required' }),
         rating: z
             .number({ required_error: 'Rating is required' })
-            .int() // estrellas enteras: un 4.73 sesgaba el promedio de reputación
+            .int() // whole stars: 4.73 would skew the reputation average
             .min(1)
             .max(5),
-        // D.3 (Tanda 2): comentario breve opcional (max 500 chars).
+        // Optional short comment (max 500 chars).
         comment: z.string().trim().max(500).optional(),
     }),
 });

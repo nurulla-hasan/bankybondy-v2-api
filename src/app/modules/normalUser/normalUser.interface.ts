@@ -19,15 +19,13 @@ export interface INormalUser {
     socialLinks: string[];
     subscriptionType: (typeof ENUM_SUBSCRIPTION_TYPE)[keyof typeof ENUM_SUBSCRIPTION_TYPE];
     bondLimit: number;
-    // Rastro de la palanca manual del plan (admin): quién, cuándo y por qué. Es
-    // la única vía por la que un plan puede BAJAR (contracargos) o subir sin pago
-    // (reparaciones), y las dos mueven plata.
+    // Manual plan override trail (who/when/why): the only path where a plan drops
+    // (chargebacks) or rises without payment (fixes) — both move money.
     subscriptionSetBy?: Types.ObjectId;
     subscriptionSetAt?: Date;
     subscriptionSetReason?: string;
-    // Historial completo de los cambios manuales (append-only, acotado a 50).
-    // Es lo que permite reconstruir una disputa; los tres campos de arriba son
-    // el denormalizado del ultimo, para poder listar sin abrir el array.
+    // Full history of manual changes (append-only, capped at 50). The three fields
+    // above denormalize the latest so listings avoid the array.
     subscriptionHistory?: {
         type?: string;
         by?: Types.ObjectId;
@@ -35,40 +33,36 @@ export interface INormalUser {
         reason?: string;
         from?: string;
     }[];
-    // Último tope (bondLimit) por el que ya se avisó el empujón de suscripción, para
-    // no repetir el aviso. Al subir de plan cambia el bondLimit y se vuelve a avisar.
+    // Last bondLimit already nudged; a plan change alters bondLimit and re-arms it.
     subscriptionNudgeAt?: number;
-    // Checkout iniciado sin pagar (reutilización de URL / anti-duplicado).
+    // Checkout started but unpaid (URL reuse / anti-duplicate).
     pendingSubscriptionCheckout?: {
         plan?: 'Standard' | 'Premium';
         provider?: 'paypal' | 'mercadopago';
         url?: string;
         createdAt?: Date;
     };
-    // Contador-guardia interno (fix de carrera del bondLimit): se incrementa dentro
-    // de la transacción de creación de vínculos para forzar un WriteConflict entre
-    // creaciones concurrentes del mismo usuario. No tiene significado de negocio.
+    // Internal race guard: bumped inside the bond-creation transaction to force a
+    // WriteConflict between concurrent creates by the same user. No business meaning.
     bondSeq?: number;
     bondsPublic?: boolean;
-    // Privacidad: si es false, el perfil NO aparece en el listado de Personas
-    // ni en su busqueda. NO afecta el matcheo (sigue generando cadenas) ni el
-    // acceso por link directo al perfil. Default true (listado, comportamiento actual).
+    // Privacy: false keeps the profile out of the People listing and search. Matching
+    // and direct-link access are unaffected. Default true.
     listedInPeople?: boolean;
-    // Interno (vinculosVivos.ts): tiene al menos un vínculo vivo.
+    // Internal (vinculosVivos.ts): has at least one live link.
     hasActiveBonds?: boolean;
-    // Categorías de notificación silenciadas (Tanda C). No suman al globito.
+    // Muted notification categories (Tanda C); they don't feed the badge.
     mutedNotificationCategories?: string[];
-    // Baja del resumen/digest semanal (List-Unsubscribe de un clic). true = NO recibe
-    // el digest automático. No afecta los correos transaccionales (activación/reset).
+    // Digest opt-out (one-click List-Unsubscribe). true = no automatic digest;
+    // transactional mail is unaffected.
     digestOptOut?: boolean;
     reputation?: {
         avg: number;
         count: number;
         score: number;
     };
-    // Geolocalizacion del usuario (GeoJSON Point [lng, lat]). Opcional.
-    // NUNCA se expone en las respuestas de Personas (solo se usa para el
-    // modo "near" y para heredar la ubicacion al crear un bond).
+    // User geolocation (GeoJSON Point [lng, lat]). Never exposed in People responses;
+    // only used for "near" mode and to inherit location when creating a bond.
     location?: {
         type: 'Point';
         coordinates: [number, number];

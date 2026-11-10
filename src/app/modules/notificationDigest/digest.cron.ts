@@ -2,16 +2,15 @@ import cron from 'node-cron';
 import { errorLogger, logger } from '../../shared/logger';
 import { sendWeeklyDigests } from './digest.service';
 
-// Lunes 10:00 HORA ARGENTINA. node-cron usa la hora del SERVER, que corre en
-// UTC (UTC-3 respecto de AR), por eso la expresión dice 13 y no 10: con '0 10'
-// el mail salía 07:00 AR. Configurable por env.
+// Monday 10:00 Argentina time. node-cron uses SERVER time (UTC), hence 13 and not 10:
+// with '0 10' the mail left at 07:00 AR. Env-configurable.
 const DIGEST_CRON = process.env.DIGEST_CRON || '0 13 * * 1';
 const DIGEST_ENABLED = process.env.DIGEST_ENABLED === 'true';
 
 let scheduled = false;
 
-/** Registra el cron del digest semanal (idempotente). Se llama al arrancar el
- *  worker. Si DIGEST_ENABLED != true, NO agenda nada (queda inerte). */
+/** Registers the weekly digest cron (idempotent), called on worker start. Schedules
+ *  nothing unless DIGEST_ENABLED is true. */
 export const startDigestCron = (): void => {
     if (!DIGEST_ENABLED) {
         logger.info(

@@ -9,7 +9,7 @@ export interface INotification {
     type: (typeof ENUM_NOTIFICATION_TYPE)[keyof typeof ENUM_NOTIFICATION_TYPE];
     redirectId?: string;
     deleteBy?: Types.ObjectId[];
-    // Firmas de match ya avisadas (solo MATCH): evita re-marcar no-leída una notif
-    // por una firma que reaparece. Ver notification.model.ts / matching.notify.ts.
+    // Match signatures already notified (MATCH only): prevents re-marking a
+    // notification unread when a signature reappears. See matching.notify.ts.
     notifiedSignatures?: string[];
 }

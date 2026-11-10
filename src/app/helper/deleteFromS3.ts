@@ -17,14 +17,10 @@ const s3 = new S3Client({
 });
 
 export const deleteFileFromS3 = async (fileName: string) => {
-    // SEGURIDAD (borrado arbitrario de S3): la key se deriva SIEMPRE del `pathname`
-    // parseado con `new URL()`, NO de un `split('cloudfront.net/')` sobre el string
-    // crudo. El split incluía el query string, así que una URL como
-    //   https://x.com/uploads/.../<propioId>/x.jpg?z=cloudfront.net/uploads/.../victima.jpg
-    // pasaba el chequeo de dueño del controller (que valida el pathname, sin query)
-    // pero apuntaba a la key de la víctima → borrado de cualquier objeto S3. Ahora
-    // se exige además el HOST EXACTO del CDN configurado (CLOUDFRONT_URL) y el
-    // query/fragment se ignoran por construcción.
+    // Security: derive the key only from the parsed URL pathname, never from a
+    // split on the raw string — the query string could smuggle another user's key
+    // past the controller's owner check. Require the exact CLOUDFRONT_URL host;
+    // query/fragment are ignored by construction.
     if (typeof fileName !== 'string') {
         console.error('deleteFileFromS3: entrada inválida, se ignora.');
         return;
@@ -56,7 +52,6 @@ export const deleteFileFromS3 = async (fileName: string) => {
     const bucket = process.env.AWS_S3_BUCKET_NAME!;
 
     try {
-        // 1. Check if the file exists in S3
         const headCommand = new HeadObjectCommand({
             Bucket: bucket,
             Key: decodedFileName,
@@ -72,7 +67,6 @@ export const deleteFileFromS3 = async (fileName: string) => {
             throw err;
         }
 
-        // 2. Delete the file
         const deleteCommand = new DeleteObjectCommand({
             Bucket: bucket,
             Key: decodedFileName,

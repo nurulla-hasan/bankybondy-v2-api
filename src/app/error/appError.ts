@@ -1,7 +1,6 @@
 class AppError extends Error {
   public statusCode: number;
-  // Codigo maquina-legible opcional (ej. 'BOND_LIMIT_REACHED') para que el
-  // front pueda reaccionar de forma inequivoca sin parsear el mensaje.
+  // Optional machine-readable code so the frontend need not parse messages.
   public code?: string;
   constructor(statusCode: number, message: string, code?: string, stack = '') {
     super(message);

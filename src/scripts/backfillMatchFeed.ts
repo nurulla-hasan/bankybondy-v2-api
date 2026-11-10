@@ -1,10 +1,9 @@
-/* Backfill del read model por participante (BondMatchFeed) desde BondMatch.
+/* Backfill of the per-participant read model (BondMatchFeed) from BondMatch.
+ * Idempotent and resumable: walks BondMatch by `_id` in batches and upserts
+ * `(bond, matchKey)`, keeping the best score. Never deletes from BondMatch, so the
+ * legacy path stays intact for rollback.
  *
- * Idempotente y reanudable: recorre BondMatch por `_id` en lotes y hace upsert
- * `(bond, matchKey)`. No borra nada de BondMatch; el camino legacy sigue intacto
- * para rollback.
- *
- * Uso: npx tsx src/scripts/backfillMatchFeed.ts
+ * Usage: npx tsx src/scripts/backfillMatchFeed.ts
  */
 import mongoose from 'mongoose';
 import config from '../app/config';
@@ -41,9 +40,9 @@ const main = async (): Promise<void> => {
         if (!rows.length) break;
 
         const now = new Date();
-        // Dedup dentro del lote: el mismo trato puede venir guardado bajo dos
-        // discoverers (a veces con scores históricos distintos). Nos quedamos
-        // con el MEJOR, igual que el serving legacy (bestBySet).
+        // Dedupe within the batch: the same deal may be stored under two
+        // discoverers (sometimes with different historical scores). Keep the BEST,
+        // like the legacy serving (bestBySet).
         const docs = new Map<string, any>();
 
         for (const row of rows as any[]) {
@@ -84,8 +83,8 @@ const main = async (): Promise<void> => {
             }
         }
 
-        // Update por pipeline: si otra fila (de un lote anterior) ya escribió
-        // este trato con un score mayor, no lo degradamos.
+        // Update via pipeline: if another row (from an earlier batch) already wrote
+        // this deal with a higher score, do not downgrade it.
         const ops: any[] = [];
         for (const doc of docs.values()) {
             const mejor = { $gt: [doc.score, { $ifNull: ['$score', -1] }] };
@@ -133,8 +132,8 @@ const main = async (): Promise<void> => {
         }
     }
 
-    // Poda final: los feeds recién creados pueden tener más filas que el tope
-    // hasta el próximo recompute de cada bond.
+    // Final prune: freshly created feeds may exceed the cap until each bond's
+    // next recompute.
     let trimmed = 0;
     for (const id of participants) {
         trimmed += await trimFeedBond(id);

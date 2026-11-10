@@ -16,9 +16,7 @@ const getDashboardMetaData = async () => {
         NormalUser.countDocuments(),
         User.countDocuments({ isBlocked: true }),
         Donate.aggregate([
-            // C.1/C.3 (Tanda 2) FIX: el modelo Donate guarda status 'Paid'
-            // (ENUM_DONATE_STATUS), no 'PAID' (ENUM_PAYMENT_STATUS). El match
-            // anterior nunca coincidia, dejando donantes/monto en 0.
+            // Donate stores status 'Paid' (ENUM_DONATE_STATUS), not 'PAID'; the old match never hit.
             {
                 $match: { status: ENUM_DONATE_STATUS.Paid },
             },
@@ -321,7 +319,7 @@ const bondChartData = async (year: number) => {
         'Dec',
     ];
 
-    // Fill missing months with 0 values
+    // Fill missing months so the chart always has 12 points.
     const data = Array.from({ length: 12 }, (_, index) => {
         const found = chartData.find((item) => item.month === index + 1);
         return {
@@ -333,7 +331,7 @@ const bondChartData = async (year: number) => {
         };
     });
 
-    // Distinct years dropdown
+    // Years that have bonds, for the dropdown.
     const yearsResult = await BondLink.aggregate([
         {
             $group: {
@@ -393,7 +391,6 @@ const getAudioPieChartData = async () => {
     return stats;
 };
 
-// get instation chart
 const getEarningChartData = async (year: number) => {
     const currentYear = year || new Date().getFullYear();
 
@@ -407,14 +404,14 @@ const getEarningChartData = async (year: number) => {
                     $gte: startOfYear,
                     $lt: endOfYear,
                 },
-                // C.3 (Tanda 2) FIX: mismo bug de status; usar ENUM_DONATE_STATUS.Paid.
+                // Same status bug as above: must use ENUM_DONATE_STATUS.Paid.
                 status: ENUM_DONATE_STATUS.Paid,
             },
         },
         {
             $group: {
                 _id: { $month: '$createdAt' },
-                totalEarning: { $sum: '$amount' }, // Sum amounts
+                totalEarning: { $sum: '$amount' },
             },
         },
         {
@@ -480,9 +477,7 @@ const getEarningChartData = async (year: number) => {
 };
 
 /**
- * C.1 (Tanda 2) - Estadistica de donantes/donaciones (admin).
- * Cantidad de donantes distintos (usuarios que donaron) y monto total donado,
- * usando el modelo Donate con status 'Paid'.
+ * Donation stats (admin): distinct donors, total amount and count, using Donate status 'Paid'.
  */
 const getDonationStats = async () => {
     const [stats] = await Donate.aggregate([
@@ -513,10 +508,8 @@ const getDonationStats = async () => {
 };
 
 /**
- * C.2 (Tanda 2) - Conteo de usuarios por tipo de suscripcion (admin).
- * Devuelve las tres cantidades (Free, Standard=10 USD, Premium=25 USD) y el
- * total, que SIEMPRE coincide con el total de NormalUser (los usuarios sin
- * subscriptionType se cuentan como Free por el default del schema).
+ * Users per subscription type (admin). Total always equals the NormalUser count:
+ * users without `subscriptionType` count as Free via the schema default.
  */
 const getSubscriptionStats = async () => {
     const grouped = await NormalUser.aggregate([
@@ -535,7 +528,7 @@ const getSubscriptionStats = async () => {
     };
 
     for (const row of grouped) {
-        // Usuarios sin subscriptionType (null/undefined) => Free.
+        // Users without subscriptionType (null/undefined) count as Free.
         const key = row._id || ENUM_SUBSCRIPTION_TYPE.Free;
         counts[key] = (counts[key] || 0) + row.count;
     }
@@ -545,7 +538,7 @@ const getSubscriptionStats = async () => {
     const premium = counts[ENUM_SUBSCRIPTION_TYPE.Premium];
 
     return {
-        free, // gratis
+        free, // free
         standard, // 10 USD
         premium, // 25 USD
         total: free + standard + premium,
@@ -553,18 +546,12 @@ const getSubscriptionStats = async () => {
 };
 
 /**
- * C.4 (Tanda 2) - Agregacion de usuarios para el mapa de calor (admin).
- *
- * NormalUser NO guarda coordenadas: solo un `address` (string, ciudad libre).
- * Las coordenadas reales viven en BondRequest.location (GeoJSON [lng, lat]).
- * Por eso se devuelven DOS agrupaciones:
- *  - byCoordinate: usuarios DISTINTOS agrupados por coordenada redondeada de sus
- *    bond requests => [{ lat, lng, count }] (ideal para dibujar los circulos).
- *  - byCity: usuarios agrupados por `address` de NormalUser => [{ city, count }]
- *    (fallback textual cuando no hay coordenadas).
+ * Geo aggregation for the heat map (admin). NormalUser has no coordinates, only an
+ * `address`; real coords live in BondRequest.location. Returns byCoordinate (distinct
+ * users per rounded point) and byCity (textual fallback).
  */
 const getUserGeoAggregation = async () => {
-    // --- Por coordenada (desde BondRequest, contando usuarios distintos) ---
+    // --- By coordinate (from BondRequest, counting distinct users) ---
     const byCoordinate = await BondRequest.aggregate([
         {
             $match: {
@@ -572,7 +559,7 @@ const getUserGeoAggregation = async () => {
             },
         },
         {
-            // Redondear a ~2 decimales (~1.1 km) para agrupar puntos cercanos.
+            // Round to ~2 decimals (~1.1 km) to group nearby points.
             $group: {
                 _id: {
                     lng: {
@@ -602,7 +589,7 @@ const getUserGeoAggregation = async () => {
         { $sort: { count: -1 } },
     ]);
 
-    // --- Por ciudad (desde NormalUser.address) ---
+    // --- By city (from NormalUser.address) ---
     const byCity = await NormalUser.aggregate([
         {
             $match: {
@@ -629,22 +616,10 @@ const getUserGeoAggregation = async () => {
 };
 
 /**
- * Income (agosto 2026): ingresos por categoría a lo largo del tiempo, para el
- * panel "Income" del dashboard. Fuente: colección Transaction (los cobros reales
- * acreditados por PayPal/MercadoPago).
- *
- * Tres categorías, discriminadas SIN adivinar por monto:
- *  - Donación   -> type === 'Donation'
- *  - Standard   -> type === 'Subscription' && plan === 'Standard'
- *  - Premium    -> type === 'Subscription' && plan === 'Premium'
- *
- * `plan` empezó a guardarse en agosto/2026; las suscripciones ARS viejas no lo
- * tienen y por eso NO entran en Standard/Premium (decisión: robusto de acá en
- * adelante, las históricas no importan).
- *
- * USD (PayPal) y ARS (MercadoPago) NO se pueden sumar entre sí, así que SIEMPRE
- * se filtra por una moneda (el dashboard tiene un selector USD/ARS).
- * granularity: 'month' (12 meses de un año) | 'year' (total por año, todos).
+ * Income per category for the dashboard, from Transaction (real charges settled by
+ * PayPal/MercadoPago). Categories by type/plan: Donation, Standard, Premium; old ARS
+ * subscriptions have no `plan` so they fall outside Standard/Premium. USD and ARS are
+ * never summed together (always filter by one currency). `granularity` is 'month' or 'year'.
  */
 const getIncomeChartData = async (
     year: number,
@@ -653,14 +628,13 @@ const getIncomeChartData = async (
 ) => {
     const cur = currency === 'ARS' ? 'ARS' : 'USD';
 
-    // Para USD también contamos los registros sin `currency` (histórico
-    // dolarizado anterior al campo; el default del schema es 'USD').
+    // For USD also count records with no `currency` (pre-field history; schema default is 'USD').
     const currencyMatch: any =
         cur === 'USD'
             ? { $or: [{ currency: 'USD' }, { currency: { $exists: false } }] }
             : { currency: 'ARS' };
 
-    // Suma condicional del monto según la categoría (todo en un solo $group).
+    // Conditional sum of amount per category (all in one $group).
     const sumIf = (cond: any) => ({ $sum: { $cond: [cond, '$amount', 0] } });
     const isDonation = { $eq: ['$type', ENUM_TRANSACTION_TYPE.DONATION] };
     const isStandard = {
@@ -676,7 +650,7 @@ const getIncomeChartData = async (
         ],
     };
 
-    // Años con datos en la moneda elegida (para el selector del dashboard).
+    // Years with data in the chosen currency (for the dashboard selector).
     const yearsResult = await Transaction.aggregate([
         { $match: currencyMatch },
         { $group: { _id: { $year: '$createdAt' } } },
@@ -685,7 +659,7 @@ const getIncomeChartData = async (
     ]);
     const yearsDropdown = yearsResult.map((r: any) => r.year);
 
-    // ---- Modo anual: total por año, todos los años ----
+    // ---- Yearly mode: total per year, all years ----
     if (granularity === 'year') {
         const yearAgg = await Transaction.aggregate([
             { $match: currencyMatch },
@@ -715,7 +689,7 @@ const getIncomeChartData = async (
         };
     }
 
-    // ---- Modo mensual: 12 meses de un año ----
+    // ---- Monthly mode: 12 months of one year ----
     const currentYear = year || new Date().getFullYear();
     const startOfYear = new Date(currentYear, 0, 1);
     const endOfYear = new Date(currentYear + 1, 0, 1);

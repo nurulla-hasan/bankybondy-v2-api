@@ -3,12 +3,12 @@ import catchAsync from '../../utilities/catchasync';
 import sendResponse from '../../utilities/sendResponse';
 import recommendedUserServices from './recommendedUser.service';
 
-// ⚠️ DORMIDO — NO RUTEAR SIN BLINDAR. Este handler hace insertMany(req.body) sin
-// auth, sin whitelist y sin validación. HOY no está montado en recommendedUser.routes
-// (solo GET /get, con auth), así que NO es explotable. Si algún día se lo conecta a
-// un POST, hay que exigir auth + validar/whitelistear el body ANTES: tal cual está,
-// re-abriría el P0 (siembra anónima masiva en RecommendedUser). El feature queda
-// dormido a propósito (no se borra); solo NO conectar sin blindar primero.
+// DORMANT — DO NOT ROUTE WITHOUT HARDENING. This handler does insertMany(req.body)
+// with no auth, no whitelist and no validation. It is NOT mounted in
+// recommendedUser.routes today (only the authed GET /get), so it is not
+// exploitable. If it is ever wired to a POST, require auth and validate/whitelist
+// the body FIRST: as-is it would reopen the P0 (mass anonymous seeding). The
+// feature is dormant on purpose (do not delete); just do not connect it unhardened.
 const createRecommendedUsers = catchAsync(async (req, res) => {
     const result = await recommendedUserServices.createRecommendedUsers(
         req.body

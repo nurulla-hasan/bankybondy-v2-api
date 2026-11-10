@@ -1,29 +1,4 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// import nodemailer from 'nodemailer';
-// import config from '../config';
-// export const sendEmail = async (to: string, subject: string, html: string) => {
-//   console.log('receiver email', to);
-//   console.log( config.smtp.smtp_host)
-//   console.log( config.smtp.smtp_pass)
-//   const transporter = nodemailer.createTransport({
-//     host: 'smtp.gmail.com',
-//     port: 465,
-//     secure: config.NODE_ENV === 'production',
-//     auth: {
-//       //   TODO: replace `user` and `pass` values from <https://forwardemail.net>
-//       user: config.smtp.smtp_host,
-//       pass: config.smtp.smtp_pass,
-//     },
-//   });
-//   await transporter.sendMail({
-//     from: 'maniksarker265@gmail.com', // sender address
-//     to, // list of receivers
-//     subject: subject, // Subject line
-//     text: '', // plain text body
-//     html, // html body
-//   });
-// };
-
 import nodemailer from 'nodemailer';
 import config from '../config';
 
@@ -35,11 +10,9 @@ const formattedDate = currentDate.toLocaleDateString('en-US', {
     day: '2-digit',
 });
 
-// Deriva una versión TEXTO PLANO del HTML. Importa para entregabilidad: Gmail
-// penaliza los correos HTML-only, así que SIEMPRE se manda multipart (html + text).
-// Primero se sacan head/style/script/comentarios (clave: el <style> trae la fuente
-// Poppins en base64, que jamás debe filtrarse al texto), luego se convierten los
-// bloques a saltos de línea y se limpian entidades/espacios.
+// Derive a plain-text version of the HTML for deliverability (Gmail penalizes
+// HTML-only mail). Strips head/style/script first so the base64 Poppins font never
+// leaks into the text.
 const htmlToText = (html: string): string =>
     String(html || '')
         .replace(/<head[\s\S]*?<\/head>/gi, ' ')
@@ -64,20 +37,17 @@ const sendEmail = async (options: {
     email: string;
     subject: string;
     html: any;
-    from?: string; // override opcional del remitente (ej. notificaciones@ para el digest)
-    text?: string; // alternativa texto plano; si no viene, se deriva del HTML
-    headers?: Record<string, string>; // headers extra (ej. List-Unsubscribe del digest)
+    from?: string; // optional sender override (e.g. notifications@ for the digest)
+    text?: string; // plain-text alternative; derived from the HTML if absent
+    headers?: Record<string, string>; // extra headers (e.g. List-Unsubscribe)
 }) => {
-    // Host/puerto por config (SES-ready). Si no hay SMTP_HOST, cae al Gmail de
-    // siempre → no cambia el comportamiento actual. Con SES: SMTP_HOST =
-    // email-smtp.<region>.amazonaws.com, SMTP_MAIL/PASS = credenciales SMTP de
-    // SES, EMAIL_FROM = una dirección de tu dominio verificado.
+    // Host/port from config (SES-ready); falls back to Gmail when SMTP_HOST is unset.
     const host = config.smtp.smtp_host || 'smtp.gmail.com';
     const port = parseInt((config.smtp.smtp_port as string) || '465');
     const transporter = nodemailer.createTransport({
         host,
         port,
-        secure: port === 465, // 465 = TLS directo; 587 = STARTTLS
+        secure: port === 465, // 465 = implicit TLS; 587 = STARTTLS
         auth: {
             user: config.smtp.smtp_mail,
             pass: config.smtp.smtp_pass,
@@ -95,19 +65,15 @@ const sendEmail = async (options: {
         date: formattedDate,
         subject,
         html,
-        // Alternativa texto plano (multipart/alternative) → mejor entregabilidad.
+        // Plain-text alternative (multipart/alternative) → better deliverability.
         text: text || htmlToText(html),
-        // Headers extra opcionales (ej. List-Unsubscribe/One-Click en el digest).
+        // Optional extra headers (e.g. List-Unsubscribe/One-Click in the digest).
         ...(headers ? { headers } : {}),
     };
 
-    // Falla CERRADA pero NO fatal. Un rechazo de SMTP (corte, throttle de
-    // Gmail/SES, credencial mala, destinatario rechazado) NUNCA debe convertirse
-    // en unhandledRejection: server.ts sale del proceso ante uno, así que una
-    // promesa de mail suelta (registro, reset, contact-us, resend) podía tumbar
-    // el server (crash-loop). Acá se atrapa y loguea: devuelve true si salió,
-    // false si falló. Los flujos que NECESITAN saber si llegó pueden await-ear
-    // y chequear el booleano; los fire-and-forget quedan a salvo por diseño.
+    // Fail closed but not fatal: an SMTP rejection must never become an
+    // unhandledRejection (server.ts exits on those). Returns true if sent, false
+    // if it failed; callers that need delivery can await and check the boolean.
     try {
         await transporter.sendMail(mailOptions);
         return true;

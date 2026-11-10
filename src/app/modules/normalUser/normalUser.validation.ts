@@ -52,10 +52,8 @@ const subscriptionValidationSchema = z.object({
     }),
 });
 
-// Palanca manual del plan (admin). A diferencia de la compra, acá SÍ se admite
-// 'Free': es justamente la vía para revocar un plan ante un contracargo, y la
-// única por la que un plan puede bajar. El motivo es opcional pero se pide en la
-// UI: una palanca que mueve plata sin registro es peor que no tenerla.
+// Manual plan lever (admin). Unlike purchase it DOES accept 'Free': that's the way to
+// revoke on a chargeback, and the only path a plan can go down. `reason` is optional.
 const adminSetSubscriptionSchema = z.object({
     body: z.object({
         type: z.enum(['Free', 'Standard', 'Premium']),
@@ -63,8 +61,8 @@ const adminSetSubscriptionSchema = z.object({
     }),
 });
 
-// Actualizacion de la geolocalizacion del usuario. lat/lng validados a rangos
-// geograficos validos. `mode` opcional (default 'auto' en el servicio).
+// User geolocation update; lat/lng checked against valid ranges. `mode` is optional
+// (defaults to 'auto' in the service).
 const updateLocationSchema = z.object({
     body: z.object({
         lat: z

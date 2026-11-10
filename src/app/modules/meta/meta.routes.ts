@@ -37,28 +37,28 @@ router.get(
     MetaController.getEarningChartData
 );
 
-// Income: ingresos por categoría (donación / standard / premium) en el tiempo.
+// Income: revenue by category (donation / standard / premium) over time.
 router.get(
     '/income-chart-data',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),
     MetaController.getIncomeChartData
 );
 
-// C.1 (Tanda 2): donantes distintos + monto total donado.
+// Distinct donors + total donated amount.
 router.get(
     '/donation-stats',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),
     MetaController.getDonationStats
 );
 
-// C.2 (Tanda 2): conteo de usuarios por tipo de suscripcion.
+// User count by subscription type.
 router.get(
     '/subscription-stats',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),
     MetaController.getSubscriptionStats
 );
 
-// C.4 (Tanda 2): agregacion de usuarios por ciudad/coordenada (mapa de calor).
+// Users aggregated by city/coordinate (heat map).
 router.get(
     '/user-geo-aggregation',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin),

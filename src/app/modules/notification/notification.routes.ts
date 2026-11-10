@@ -9,9 +9,8 @@ router.get(
     auth(USER_ROLE.superAdmin, USER_ROLE.user),
     notificationController.getAllNotification
 );
-// Conteo de no vistas (+ última notificación) para sembrar el badge en la carga
-// inicial. La vista en vivo se mantiene por el evento socket 'notification', que
-// ya emite exactamente esta misma forma. Aditivo: no toca los otros endpoints.
+// Unseen count (+ latest notification) to seed the badge on initial load; the
+// socket 'notification' event keeps it live with the same shape.
 router.get(
     '/unseen-count',
     auth(USER_ROLE.superAdmin, USER_ROLE.user),
@@ -22,8 +21,7 @@ router.patch(
     auth(USER_ROLE.superAdmin, USER_ROLE.user),
     notificationController.seeNotification
 );
-// Marca UNA notificación como vista (al abrir esa notificación puntual). El badge
-// baja de a una, no al abrir la campana.
+// Mark ONE notification as seen (on opening it); the badge drops one at a time.
 router.patch(
     '/see-notification/:id',
     auth(USER_ROLE.superAdmin, USER_ROLE.user),
@@ -35,8 +33,8 @@ router.delete(
     notificationController.deleteNoficiation
 );
 
-// Preferencias de silenciado por categoría (Tanda C): traer y guardar qué
-// categorías silenció el usuario. Sólo usuarios normales (el admin no silencia).
+// Per-category mute preferences: read and save which categories the user muted.
+// Normal users only (admins do not mute).
 router.get(
     '/preferences',
     auth(USER_ROLE.user),
@@ -48,16 +46,15 @@ router.patch(
     notificationController.updatePreferences
 );
 
-// Preview del digest semanal a la propia casilla (Fase 4). POST sin body.
+// Preview of the weekly digest sent to the caller's own inbox. POST without body.
 router.post(
     '/digest-preview',
     auth(USER_ROLE.user),
     notificationController.digestPreview
 );
 
-// Baja del resumen/digest (List-Unsubscribe). PÚBLICO: la autorización es el token
-// firmado que viaja en el link del correo (no hay login). POST = one-click de Gmail;
-// GET = clic manual → página de confirmación.
+// Digest unsubscribe (List-Unsubscribe). PUBLIC: the signed token in the email
+// link is the authorization. POST = Gmail one-click; GET = manual click.
 router.post(
     '/digest-unsubscribe/:token',
     notificationController.digestUnsubscribe

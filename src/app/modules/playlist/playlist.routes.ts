@@ -9,7 +9,6 @@ import { uploadFile } from '../../helper/mutler-s3-uploader';
 
 const router = express.Router();
 
-// Create Playlist
 router.post(
     '/create',
     auth(USER_ROLE.user),
@@ -19,7 +18,6 @@ router.post(
     PlaylistController.createPlaylist
 );
 
-// Get All Playlists
 router.get(
     '/all-playlists',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
@@ -31,14 +29,12 @@ router.get(
     PlaylistController.getMyPlaylists
 );
 
-// Get Playlist by ID
 router.get(
     '/single-playlist/:playlistId',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),
     PlaylistController.getPlaylistById
 );
 
-// Update Playlist-----
 router.patch(
     '/update/:playlistId',
     auth(USER_ROLE.user),
@@ -48,7 +44,6 @@ router.patch(
     PlaylistController.updatePlaylist
 );
 
-// Delete Playlist
 router.delete(
     '/delete/:playlistId',
     auth(USER_ROLE.superAdmin, USER_ROLE.admin, USER_ROLE.user),

@@ -6,15 +6,13 @@ export interface IBondLink {
     name: string;
     participants: Types.ObjectId[];
     requestedBonds: Types.ObjectId[];
-    // Llave de idempotencia: hash determinista (ids de bonos ordenados y unicos,
-    // unidos por '_'). Un indice unico parcial sobre {bondsKey, status:Ongoing}
-    // impide que un doble-submit cree DOS vinculos activos con el mismo conjunto
-    // de bonos. Opcional: los docs viejos (previos a esta version) no lo tienen.
+    // Idempotency key: deterministic hash of sorted unique bond ids joined by '_'.
+    // A partial unique index on {bondsKey, status:Ongoing} blocks double-submits.
+    // Optional: older docs predate it.
     bondsKey?: string;
     status: (typeof ENUM_BOND_LINK_STATUS)[keyof typeof ENUM_BOND_LINK_STATUS];
     markAsCompletedBy: Types.ObjectId[];
-    // Recordatorio de cierre ya enviado (para no re-avisar): lo setea el sweep al
-    // nudgear a los que no completaron un trueque viejo Ongoing.
+    // Close reminder already sent (set by the sweep) so we don't notify twice.
     reminderSentAt?: Date;
     createdAt: Date;
     updated: Date;

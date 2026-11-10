@@ -17,9 +17,8 @@ const addRating = async (
     profileId: string,
     payload: IBondRating & { userId: string }
 ) => {
-    // Anti auto-calificación: tu propio vínculo está en el bondLink, así que sin
-    // este guard podías mandar userId = vos mismo y ponerte 5 estrellas, inflando tu
-    // reputación (que alimenta el ranking del matcheo y el orden de Personas).
+    // Anti self-rating: you could otherwise rate yourself 5 stars and inflate
+    // the reputation that drives matching and People ordering.
     if (String(payload.userId) === String(profileId)) {
         throw new AppError(
             httpStatus.BAD_REQUEST,
@@ -36,22 +35,9 @@ const addRating = async (
         throw new AppError(httpStatus.NOT_FOUND, 'Bond link not found');
     }
 
-    // Para calificar tenés que haber marcado VOS el trueque como completado.
-    //
-    // Antes se exigía que el vínculo entero estuviera Completed (todos los
-    // participantes marcados). Eso rompía el flujo real: los intercambios de la
-    // vida no ocurren a la vez, cada uno cierra su parte cuando le toca, y quien
-    // marcaba primero se quedaba sin poder opinar — el modal se le abría y el
-    // backend le rechazaba la reseña. Peor: si el círculo se cerraba mientras no
-    // estaba, no volvía a ver el modal nunca.
-    //
-    // Ahora cada uno califica al marcar, a su tiempo. Si la contraparte no
-    // cumplió, se la califica mal y listo: el sistema no sanciona a nadie, sólo
-    // registra la opinión de quien sí participó.
-    //
-    // El guard se mantiene fuerte donde importa: hay que haber puesto la propia
-    // firma sobre el trueque. Quien nunca marcó completado no puede repartir
-    // estrellas.
+    // You must have marked YOURSELF as completed to rate. Requiring the whole
+    // link to be Completed blocked the first participant from rating at all.
+    // The strong guard is the own signature only.
     const marcasteCompletado = (bondLink.markAsCompletedBy ?? []).some(
         (x: any) => x?.toString() === profileId.toString()
     );
@@ -61,9 +47,9 @@ const addRating = async (
             'Para calificar tenés que marcar el trueque como completado.'
         );
     }
-    // `requestedBonds` puede tener null si un bond referenciado fue borrado por su
-    // dueño después de crear el BondLink → `bond.user` crasheaba (500). Optional
-    // chaining defensivo. Además el chequeo de bondLink va ANTES (orden corregido).
+    // `requestedBonds` may contain null if a referenced bond was deleted by its
+    // owner, so `bond.user` crashed. Optional chaining is defensive; bondLink is
+    // checked first.
     const ratedUserBondRequest: any = bondLink.requestedBonds.find(
         (bond: any) => bond?.user?.toString() == payload.userId
     );
@@ -75,9 +61,8 @@ const addRating = async (
         );
     }
 
-    // D.3 (Tanda 2): crear o ACTUALIZAR la valoracion (rating + comentario) del
-    // mismo par (ratedBy, rated, bondLink). Antes se rechazaba la segunda vez;
-    // ahora se permite editar la propia puntuacion/comentario (upsert idempotente).
+    // Create or UPDATE the rating of the same (ratedBy, rated, bondLink) pair;
+    // the upsert makes editing idempotent.
     try {
         const result = await BondRating.findOneAndUpdate(
             {
@@ -93,12 +78,11 @@ const addRating = async (
                     want: ratedUserBondRequest.want,
                     offer: ratedUserBondRequest.offer,
                     rating: payload.rating,
-                    // Rating en SUSPENSO: solo cuenta para la reputación si el trueque
-                    // YA está cerrado (rater tardío, tras el cierre). Si sigue Ongoing,
-                    // queda en suspenso y se aplica en LOTE cuando todos completen.
+                    // Suspended rating: only counts once the trade is closed;
+                    // otherwise it is applied in batch when everyone completes.
                     applied:
                         bondLink.status === ENUM_BOND_LINK_STATUS.Completed,
-                    // Solo se persiste si viene en el payload; undefined no borra.
+                    // Persisted only if present in the payload; undefined does not clear.
                     ...(payload.comment !== undefined
                         ? { comment: payload.comment }
                         : {}),
@@ -111,14 +95,11 @@ const addRating = async (
                 setDefaultsOnInsert: true,
             }
         );
-        // La reputacion cacheada del usuario valorado se recalcula UNICAMENTE via
-        // el post-hook 'findOneAndUpdate' de BondRating (que ya cubre save/update/
-        // delete). Antes se llamaba tambien aqui explicitamente -> doble recomputo
-        // redundante en cada valoracion. Se elimina para no duplicar el trabajo.
+        // The rated user's cached reputation is recomputed ONLY by the
+        // BondRating post-hook 'findOneAndUpdate' (covers save/update/delete).
 
-        // Notificación (Fase 2): avisar al usuario CALIFICADO que recibió una
-        // reseña. Best-effort, no bloquea la respuesta. `payload.userId` = rated,
-        // `profileId` = quien califica (redirectId apunta a esa persona).
+        // Notify the RATED user. Best-effort, does not block the response.
+        // `payload.userId` = rated, `profileId` = rater (redirectId points there).
         sendNotification({
             title: 'Tenés una nueva reseña',
             message: 'Alguien contó cómo fue encontrarse con vos.',
@@ -140,9 +121,8 @@ const addRating = async (
 };
 
 /**
- * D.3 (Tanda 2) - Vista publica de reputacion de un usuario.
- * Devuelve la reputacion cacheada + la lista de puntuaciones recibidas con
- * quien puntuo (nombre/imagen) y el comentario. Paginada.
+ * Public view of a user's reputation: cached score plus the received ratings
+ * (rater name/image and comment). Paginated.
  */
 const getPublicRatings = async (
     ratedUserId: string,
@@ -154,7 +134,7 @@ const getPublicRatings = async (
     }
 
     const page = clampPage(query.page);
-    const limit = clampLimit(query.limit); // antes sin tope superior → ?limit=9999999
+    const limit = clampLimit(query.limit); // previously uncapped: ?limit=9999999
     const skip = (page - 1) * limit;
 
     const ratedId = new mongoose.Types.ObjectId(ratedUserId);
@@ -166,10 +146,8 @@ const getPublicRatings = async (
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
-    // Bloqueos (ambas direcciones) del que mira. Se usan para: 1) ocultar las
-    // reseñas escritas por usuarios bloqueados (ratedBy $nin), y 2) si el propio
-    // perfil visitado esta en una relacion de bloqueo con el que mira, no mostrar
-    // nada (devolver el mismo shape pero vacio).
+    // Viewer's blocks (both directions): hide ratings by blocked users, and
+    // return an empty shape if the visited profile is in a block relation.
     const blockedObjectIds = viewerId
         ? await getBlockedObjectIdsFor(viewerId)
         : [];
@@ -201,8 +179,7 @@ const getPublicRatings = async (
 
     const [ratings, total, agg] = await Promise.all([
         BondRating.find({ rated: ratedId, ratedBy: { $nin: blockedObjectIds }, applied: true })
-            // Se incluye `reputation` del que puntua para que el front pueda
-            // enlazar a su perfil y mostrar su nº de recomendaciones.
+            // Include the rater's `reputation` so the frontend can link to it.
             .populate({
                 path: 'ratedBy',
                 select: 'name profile_image reputation',
@@ -217,9 +194,8 @@ const getPublicRatings = async (
             ratedBy: { $nin: blockedObjectIds },
             applied: true,
         }),
-        // Media/conteo DERIVADOS EN VIVO de las valoraciones reales, para que la
-        // cabecera del perfil siempre coincida con las reseñas visibles aunque
-        // la reputacion cacheada este obsoleta.
+        // Live avg/count from the real ratings so the header always matches the
+        // visible reviews even when the cached reputation is stale.
         BondRating.aggregate([
             { $match: { rated: ratedId, ratedBy: { $nin: blockedObjectIds }, applied: true } },
             {
@@ -242,8 +218,7 @@ const getPublicRatings = async (
             total,
             totalPages: Math.ceil(total / limit),
         },
-        // avg/count SIEMPRE en vivo; score derivado con la misma funcion bayesiana
-        // (garantiza consistencia aunque el cache de NormalUser este obsoleto).
+        // avg/count always live; score uses the same Bayesian function.
         reputation: {
             avg: liveAvg,
             count: liveCount,

@@ -1,13 +1,9 @@
 /* eslint-disable no-console */
 /**
- * Backfill (una sola vez) de la reputacion cacheada de NormalUser.
+ * One-time backfill of the cached NormalUser reputation: recomputes every user
+ * who received at least one BondRating. Safe to re-run (idempotent).
  *
- * Recorre todos los usuarios que han recibido al menos un BondRating (ids
- * distintos en el campo `rated`) y recalcula su reputacion con la misma funcion
- * idempotente que usa el runtime. Seguro de re-ejecutar cuantas veces haga
- * falta: `recomputeReputation` siempre deriva el valor de los datos reales.
- *
- * Ejecutar (tras `tsc`):
+ * Run (after `tsc`):
  *     node dist/scripts/backfillReputation.js
  */
 import mongoose from 'mongoose';
@@ -23,8 +19,8 @@ async function main() {
     });
     console.log('[backfill] DB connected');
 
-    // Ids distintos de usuarios valorados (solo estos necesitan recalculo;
-    // el resto conserva el prior neutro por defecto).
+    // Distinct rated users: only these need a recompute; the rest keep the
+    // neutral prior.
     const ratedIds = (await BondRating.distinct('rated')) as mongoose.Types.ObjectId[];
     console.log(`[backfill] users with ratings: ${ratedIds.length}`);
 

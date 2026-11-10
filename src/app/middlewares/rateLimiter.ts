@@ -4,8 +4,8 @@ import { RedisStore } from 'rate-limit-redis';
 import { createClient } from 'redis';
 import config from '../config';
 
-// Cliente Redis único (la conexión) para el store distribuido, si hay REDIS_URL;
-// si no, cada limiter cae a su propio MemoryStore por defecto.
+// Single Redis connection for the distributed store when REDIS_URL is set;
+// otherwise each limiter falls back to its own MemoryStore.
 let redisClient: ReturnType<typeof createClient> | undefined;
 if (config.redis_url) {
     try {
@@ -21,14 +21,9 @@ if (config.redis_url) {
     }
 }
 
-// IMPORTANTE: cada limiter DEBE tener su PROPIA instancia de RedisStore.
-// `rate-limit-redis` guarda el `windowMs` POR STORE (en su init), y
-// `express-rate-limit` llama init una vez por limiter sobre la instancia que le
-// pasás. Compartir UNA sola instancia hacía que el windowMs del ÚLTIMO limiter
-// creado (contact = 1h) pisara a TODOS → los locks quedaban de 1 HORA en vez de
-// 1 minuto (bug P1). Además, un `prefix` distinto por limiter evita que las claves
-// colisionen entre sí (p.ej. auth y contact compartían clave por IP). Se comparte
-// la conexión (redisClient), no la instancia de store.
+// Each limiter MUST get its OWN RedisStore: `windowMs` is stored per store on
+// init, so sharing one instance let the last limiter's window apply to all.
+// Distinct prefixes keep keys from colliding; only the connection is shared.
 const makeStore = (prefix: string): Store | undefined => {
     if (!redisClient) return undefined;
     return new RedisStore({
@@ -40,14 +35,13 @@ const makeStore = (prefix: string): Store | undefined => {
 };
 
 export const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    limit: 20, // 20 intentos por ventana por IP
+    windowMs: 15 * 60 * 1000, // 15 min
+    limit: 20, // 20 attempts per window per IP
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
     store: makeStore('rl-auth:'),
-    // Fail-open: si Redis (store) falla, NO bloquear (mejor sin limite momentaneo
-    // que 500 en login/creacion). Redis local single-instance = SPOF.
+    // Fail-open: a Redis store failure must not turn login into a 500.
     passOnStoreError: true,
     message: {
         success: false,
@@ -55,29 +49,23 @@ export const authLimiter = rateLimit({
     },
 });
 
-// Límite de creación de bonds por USUARIO (anti-bot / protección de capacidad).
-// Env-overridable: BOND_CREATE_RATE_LIMIT (creates permitidos por minuto y por
-// usuario). Por defecto 15. Debe montarse DESPUÉS del middleware `auth`, para
-// que `req.user` ya esté poblado y la clave sea el id del usuario autenticado
-// (no la IP: comparte NAT/proxy). Usa su propia instancia de store vía
-// makeStore('rl-bond:') (Redis si hay REDIS_URL, MemoryStore si no) para que el
-// conteo sea coherente entre instancias y con su propio windowMs.
+// Bond creation limit per USER (anti-bot / capacity guard). Env:
+// BOND_CREATE_RATE_LIMIT (default 15/min). Must be mounted AFTER `auth` so the
+// key is the authenticated user id, not a shared NAT IP.
 const BOND_CREATE_RATE_LIMIT = Number(
     process.env.BOND_CREATE_RATE_LIMIT || 15
 );
 
 export const bondCreateLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minuto
+    windowMs: 60 * 1000, // 1 min
     limit: BOND_CREATE_RATE_LIMIT,
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
     store: makeStore('rl-bond:'),
-    // Fail-open: si Redis (store) falla, NO bloquear (mejor sin limite momentaneo
-    // que 500 en login/creacion). Redis local single-instance = SPOF.
+    // Fail-open: a Redis failure must not block creation.
     passOnStoreError: true,
-    // Clave por usuario autenticado (profileId/id inyectado por `auth`). Fallback
-    // defensivo a la IP si por algún motivo no hubiese usuario en la request.
+    // Key by authenticated user; IP is only a defensive fallback.
     keyGenerator: (req) =>
         `bond-create:${req.user?.profileId || req.user?.id || req.ip}`,
     message: {
@@ -86,24 +74,21 @@ export const bondCreateLimiter = rateLimit({
     },
 });
 
-// Límite de SUBIDA de audios por USUARIO (EC3, Tanda 0). Cada subida dispara un
-// pipeline caro: subida a S3 + ffmpeg + transcripción OpenAI + análisis OpenAI.
-// Sin límite, un bucle podía disparar costos de OpenAI descontrolados y saturar
-// el worker. Se limita por usuario autenticado (no IP: comparte NAT). Debe
-// montarse DESPUÉS de `auth` y ANTES de `uploadFile()`, para rechazar ANTES de
-// subir el archivo a S3. Env-overridable por AUDIO_UPLOAD_RATE_LIMIT.
+// Audio upload limit per USER: each upload triggers S3 + ffmpeg + OpenAI
+// transcription/analysis. Mount AFTER `auth` and BEFORE `uploadFile()` to reject
+// before the S3 upload. Env: AUDIO_UPLOAD_RATE_LIMIT.
 const AUDIO_UPLOAD_RATE_LIMIT = Number(
     process.env.AUDIO_UPLOAD_RATE_LIMIT || 5
 );
 
 export const audioUploadLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minuto
+    windowMs: 60 * 1000, // 1 min
     limit: AUDIO_UPLOAD_RATE_LIMIT,
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
     store: makeStore('rl-audio:'),
-    // Fail-open: si Redis falla, no bloquear (mejor sin límite momentáneo que 500).
+    // Fail-open: a Redis failure must not block uploads.
     passOnStoreError: true,
     keyGenerator: (req) =>
         `audio-upload:${req.user?.profileId || req.user?.id || req.ip}`,
@@ -113,11 +98,10 @@ export const audioUploadLimiter = rateLimit({
     },
 });
 
-// E0: registrar una escucha hace 1 lectura + 1 escritura en DB por request. Cap
-// generoso por usuario (el uso real navega varios audios por minuto; el conteo
-// igual está deduplicado por día) para frenar el flood sin molestar.
+// Registering a listen costs 1 read + 1 write per request. Generous cap (counts
+// are already deduped per day) to stop floods without bothering real usage.
 export const audioListenLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minuto
+    windowMs: 60 * 1000, // 1 min
     limit: 60,
     standardHeaders: true,
     legacyHeaders: false,
@@ -132,24 +116,21 @@ export const audioListenLimiter = rateLimit({
     },
 });
 
-// Límite de CREACIÓN de checkouts por USUARIO (donación/suscripción). Crear
-// órdenes/preferencias llama APIs externas (PayPal/MP) y deja registros
-// pendientes; sin límite, una sesión válida podía generar ruido y costo
-// operacional. Se limita por usuario autenticado (no IP: comparte NAT). Debe
-// montarse DESPUÉS de `auth`. Env-overridable por CHECKOUT_CREATE_RATE_LIMIT.
-// Store propio vía makeStore('rl-checkout:') (misma corrección que EC3).
+// Checkout creation limit per USER (donation/subscription): each call hits
+// PayPal/MP and leaves pending records. Mount AFTER `auth`. Env:
+// CHECKOUT_CREATE_RATE_LIMIT.
 const CHECKOUT_CREATE_RATE_LIMIT = Number(
     process.env.CHECKOUT_CREATE_RATE_LIMIT || 10
 );
 
 export const checkoutCreateLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minuto
+    windowMs: 60 * 1000, // 1 min
     limit: CHECKOUT_CREATE_RATE_LIMIT,
     standardHeaders: true,
     legacyHeaders: false,
     validate: false,
     store: makeStore('rl-checkout:'),
-    // Fail-open: si Redis falla, no bloquear (mejor sin límite momentáneo que 500).
+    // Fail-open: a Redis failure must not block payments.
     passOnStoreError: true,
     keyGenerator: (req) =>
         `checkout-create:${req.user?.profileId || req.user?.id || req.ip}`,
@@ -159,15 +140,13 @@ export const checkoutCreateLimiter = rateLimit({
     },
 });
 
-// Límite de /contact-us. Es un endpoint PÚBLICO y sin autenticación que dispara
-// un email en cada request: sin límite, cualquiera podía inundar la casilla de
-// soporte con un bucle. Se limita por IP porque no hay usuario. Más estricto que
-// `authLimiter` (5 por hora) porque nadie escribe a soporte cinco veces seguidas
-// de forma legítima. Env-overridable por CONTACT_RATE_LIMIT.
+// /contact-us rate limit: public, unauthenticated, and sends an email per
+// request. Keyed by IP (no user). Stricter than `authLimiter` on purpose.
+// Env: CONTACT_RATE_LIMIT.
 const CONTACT_RATE_LIMIT = Number(process.env.CONTACT_RATE_LIMIT || 5);
 
 export const contactLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 hora
+    windowMs: 60 * 60 * 1000, // 1 hour
     limit: CONTACT_RATE_LIMIT,
     standardHeaders: true,
     legacyHeaders: false,
@@ -180,16 +159,13 @@ export const contactLimiter = rateLimit({
     },
 });
 
-// Límite de /consumidor/solicitud (botón de arrepentimiento y de baja). Mismo caso
-// que /contact-us —público, sin auth, manda mails— pero con prefijo propio: es un
-// DERECHO del consumidor y no puede quedar bloqueado porque alguien usó antes el
-// formulario de contacto desde la misma IP. Más holgado por lo mismo, y el mensaje
-// ofrece el mail, que los Términos (7.3) también aceptan como canal.
-// Env-overridable por CONSUMIDOR_RATE_LIMIT.
+// /consumidor/solicitud limit: public, unauthenticated, sends mail. Own prefix so
+// a consumer right is never blocked by earlier contact-form use from the same IP.
+// Env: CONSUMIDOR_RATE_LIMIT.
 const CONSUMIDOR_RATE_LIMIT = Number(process.env.CONSUMIDOR_RATE_LIMIT || 10);
 
 export const consumidorLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 hora
+    windowMs: 60 * 60 * 1000, // 1 hour
     limit: CONSUMIDOR_RATE_LIMIT,
     standardHeaders: true,
     legacyHeaders: false,
@@ -205,17 +181,9 @@ export const consumidorLimiter = rateLimit({
 
 export default authLimiter;
 
-/** Precios de los planes: endpoint PÚBLICO, sin auth, y con efecto SALIENTE.
- *
- *  La convención del repo para esa combinación ya existe y está escrita en
- *  `app.ts`: `contactLimiter` está puesto justamente porque es un endpoint
- *  público sin auth que dispara algo hacia afuera. Éste es el mismo caso: con la
- *  caché de la cotización vencida o caída, cada request puede terminar en un
- *  `axios.get` a dolarapi con timeout de 5 s.
- *
- *  El límite es holgado a propósito (60/min por IP): es una lectura barata en el
- *  camino feliz y no queremos que un NAT compartido se quede sin ver los precios.
- *  Lo que acota es la ráfaga, que es lo único que hace daño. */
+/** Plan prices: PUBLIC endpoint with an OUTBOUND effect. On an expired or failed
+ *  quote cache each request can hit dolarapi with a 5 s timeout. Generous cap
+ *  (60/min per IP) — only bursts are harmful. */
 export const pricesLimiter = rateLimit({
     windowMs: 60 * 1000,
     limit: Number(process.env.PRICES_RATE_LIMIT) || 60,
@@ -223,8 +191,7 @@ export const pricesLimiter = rateLimit({
     legacyHeaders: false,
     validate: false,
     store: makeStore('rl-prices:'),
-    // Fail-open, igual que el resto: mejor sin límite un rato que 500 en la
-    // pantalla donde la gente paga.
+    // Fail-open like the rest: better unthrottled than a 500 on the payment screen.
     passOnStoreError: true,
     message: {
         success: false,

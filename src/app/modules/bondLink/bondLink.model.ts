@@ -7,8 +7,8 @@ const BondLinkSchema = new Schema<IBondLink>(
         name: { type: String, required: true },
         participants: [{ type: Schema.Types.ObjectId, ref: 'NormalUser' }],
         requestedBonds: [{ type: Schema.Types.ObjectId, ref: 'BondRequest' }],
-        // Llave de idempotencia (ids de bonos ordenados+unicos, unidos por '_').
-        // La escribe createBondLink; el indice unico parcial de abajo la usa.
+        // Idempotency key (sorted+unique bond ids joined by '_'). Written by
+        // createBondLink; used by the partial unique index below.
         bondsKey: { type: String },
         status: {
             type: String,
@@ -19,7 +19,7 @@ const BondLinkSchema = new Schema<IBondLink>(
             type: [Schema.Types.ObjectId],
             default: [],
         },
-        // Recordatorio de cierre ya enviado (sweep). null/ausente = no avisado aún.
+        // Close reminder already sent (sweep). null/absent = not notified yet.
         reminderSentAt: {
             type: Date,
             default: null,
@@ -28,20 +28,17 @@ const BondLinkSchema = new Schema<IBondLink>(
     { timestamps: true }
 );
 
-// `getMyBondLinks` consulta BondLink.find({participants: userId}) + count. Sin
-// indice era un COLLSCAN que crecia con TODOS los vinculos del sistema (no los
-// del usuario). Indice por participante + orden por recientes.
+// `getMyBondLinks` queries BondLink.find({participants: userId}) + count; without
+// an index that was a COLLSCAN over all system links. Participant + recency order.
 BondLinkSchema.index({ participants: 1, updatedAt: -1 });
 
-// R2-6 — Idempotencia contra doble-submit: a lo sumo UN vinculo ACTIVO (Ongoing)
-// por conjunto de bonos. Un doble-tap del front reenvia el mismo `requestedBonds`;
-// sin esta llave se creaban DOS BondLink + DOS conversaciones. El indice es
-// PARCIAL:
-//  - `status: Ongoing`  → al pasar a Completed/Canceled el vinculo SALE del indice
-//    y esos mismos bonos pueden volver a linkearse legitimamente en el futuro.
-//  - `bondsKey: {$exists:true}` → los docs viejos (sin la llave) NO se indexan, asi
-//    que el indice construye sin colisionar con datos previos (no requiere migracion).
-// El service captura el E11000 y devuelve el vinculo existente (idempotente).
+// R2-6 — Double-submit idempotency: at most ONE active (Ongoing) link per bond set.
+// Without it a double tap created two BondLinks and two conversations. Partial:
+//  - `status: Ongoing` → Completed/Canceled links leave the index, so those bonds
+//    can legitimately be linked again later.
+//  - `bondsKey: {$exists:true}` → old docs without the key are not indexed, so no
+//    migration is needed.
+// The service catches E11000 and returns the existing link.
 BondLinkSchema.index(
     { bondsKey: 1 },
     {

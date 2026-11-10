@@ -46,11 +46,13 @@ async function latest(store: ReconciliationStore, root: mongo.ObjectId, key?: st
     return found;
 }
 async function hasActiveBond(c: ReconciliationCollections, user: mongo.ObjectId) {
-    // Same domain as FILTRO_VINCULO_VIVO: ONGOING counts, missing isLinked counts, missing pause does not.
+    // Same domain as FILTRO_VINCULO_VIVO: ONGOING counts, missing isLinked counts,
+    // missing pause does not.
     return !!await c.bonds.findOne({ user, status: { $in: ['WAITING_FOR_LINK', 'ONGOING'] }, isPause: false, isLinked: { $ne: true } }, { projection: { _id: 1 } });
 }
 
-/** A recovered post-state is recorded as observed, NEVER as an acknowledged tool write eligible for rollback. */
+/** A recovered post-state is recorded as observed, never as an acknowledged write
+ *  eligible for rollback. */
 async function effect(c: ReconciliationCollections, store: ReconciliationStore,
     proposed: Extract<ReconciliationEvent, { event: 'reconcile-effect' }>) {
     const previous = await latest(store, proposed.root, proposed.key);
@@ -83,7 +85,7 @@ async function clearCache(c: ReconciliationCollections, store: ReconciliationSto
             await effect(c, store, { event: 'reconcile-effect', root, key: `${collection}:${before._id}`, collection, phase: 'prepared', before, after: null });
         }
     } finally { await cursor.close(); }
-    // A crashed delete may no longer appear in the query; resolve its persisted intent explicitly.
+    // A crashed delete may no longer match the query; resolve its persisted intent.
     for await (const e of store.events()) if (e.event === 'reconcile-effect' && sameId(e.root, root) && e.collection === collection && e.phase === 'prepared') await effect(c, store, e);
 }
 async function reconcileOwner(c: ReconciliationCollections, store: ReconciliationStore, root: mongo.ObjectId, user: mongo.ObjectId) {
@@ -95,10 +97,9 @@ async function reconcileOwner(c: ReconciliationCollections, store: Reconciliatio
     await effect(c, store, { event: 'reconcile-effect', root, key: `owner:${user}`, collection: 'users', phase: 'prepared', before, after: plan.after });
 }
 
-/** Call under the same quiesced writer/worker window as repair. All handles are explicit; no models/config/queues.
- * Journal scans trade disk reads for bounded heap. Discovery is durably finished BEFORE deleting any cache.
- * Invalidated active bonds remain epoch-due for the ordinary sweep; no scores/sealing or timestamps are changed.
- */
+/** Call under the same quiesced writer/worker window as repair. All handles are
+ * explicit; no models/config/queues. Discovery finishes durably before any cache
+ * delete. Invalidated active bonds stay epoch-due for the normal sweep. */
 export async function reconcileRepairNative(c: ReconciliationCollections, record: { event: string; write?: WriteManifest }, store: ReconciliationStore,
     options: { writeWindowConfirmed: boolean; batchSize?: number }) {
     if (!options.writeWindowConfirmed || !['applied', 'rolled-back'].includes(record.event) || record.write?.kind !== 'repair') throw new Error('Requires actual repair/rollback record and quiesced write window');
@@ -136,8 +137,9 @@ export async function reconcileRepairNative(c: ReconciliationCollections, record
     if (!(await latest(store, root, undefined, 'reconcile-complete'))) await store.append({ event: 'reconcile-complete', root });
 }
 
-/** Roll back business flags, not monotonic invalidation generations or deleted derived caches. The normal
- * rollback CAS still checks original text digest/revision/timestamps plus the recorded reconciliation schedule. */
+/** Roll back business flags only, not monotonic generations or deleted caches.
+ * The normal rollback CAS still checks digest/revision/timestamps plus the
+ * recorded reconciliation schedule. */
 export async function reconciledRollbackManifest(write: WriteManifest, store: ReconciliationStore): Promise<WriteManifest> {
     let schedule: Extract<ReconciliationEvent, { event: 'reconcile-effect' }> | undefined;
     for await (const e of store.events()) {

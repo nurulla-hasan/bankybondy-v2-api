@@ -14,35 +14,31 @@ router.post(
     validateRequest(authValidations.loginValidationSchema),
     authControllers.loginUser
 );
-// Ruta /google-login ELIMINADA por seguridad: aceptaba un email sin verificar
-// (bypass de autenticacion / account takeover). El login con Google va por
-// /oauth-login, que SI verifica el idToken de Google.
+// /google-login removed for security: it accepted an unverified email (account
+// takeover). Google login goes through /oauth-login, which verifies the idToken.
 router.post(
     '/change-password',
     auth(USER_ROLE.user, USER_ROLE.admin, USER_ROLE.superAdmin),
     validateRequest(authValidations.changePasswordValidationSchema),
     authControllers.changePassword
 );
-// Sin auth(): un access token VENCIDO no puede pasar el middleware, y refrescar
-// es justo lo que se necesita cuando venció. La autenticación la da el propio
-// refresh token (se verifica en el service con el refresh secret + estado del
-// usuario). Antes exigía auth() → el refresh era inalcanzable tras la expiración.
+// No auth(): an expired access token could never pass it, and refreshing is exactly
+// what's needed then. The refresh token itself authenticates (verified in the service).
 router.post(
     '/refresh-token',
     validateRequest(authValidations.refreshTokenValidationSchema),
     authControllers.refreshToken
 );
 
-// B0: token corto para el handshake de Socket.IO (lo pide el front que usa
-// cookies HttpOnly y por lo tanto no puede leer el access token). Va detrás de
-// auth(): quien ya está logueado puede mintearlo; nadie más.
+// B0: short-lived token for the Socket.IO handshake (the cookie-based front can't
+// read the access token). Behind auth(): only logged-in users can mint it.
 router.get(
     '/socket-token',
     auth(USER_ROLE.user),
     authControllers.socketToken
 );
 
-// Logout: borra la cookie HttpOnly del refresh token. Público (idempotente).
+// Logout: clears the HttpOnly refresh token cookie. Public and idempotent.
 router.post('/logout', authControllers.logoutUser);
 
 router.post(

@@ -19,16 +19,13 @@ const BondRequestSchema = new Schema<IBondRequest>(
         integrityRevision: { type: Number, default: 0, select: false },
         offerKey: { type: String, select: false },
         wantKey: { type: String, select: false },
-        // Ubicación OPCIONAL. Un usuario sin ubicación guardada (o un bond
-        // 'online') debe poder crear bonds sin coordenadas. Cuando no hay coords,
-        // el servicio NO adjunta este subdocumento (un `location` parcial rompería
-        // el índice 2dsphere). Los caminos geo/$near ya toleran su ausencia.
+        // Location is OPTIONAL: a user with no saved location (or an 'online'
+        // bond) must still create bonds. Without coords the service omits this
+        // subdoc entirely (a partial `location` breaks the 2dsphere index).
         location: {
-            // Sin `default` en `type` y con `coordinates` en `default: undefined`,
-            // Mongoose OMITE el subdocumento `location` por completo cuando no hay
-            // coords (mismo patrón probado en NormalUser). Así no queda un
-            // `{type:'Point'}` parcial que rompería el índice 2dsphere y haría
-            // crashear el cómputo de matcheo al destructurar coordinates.
+            // No default on `type` and `default: undefined` on coordinates, so
+            // Mongoose omits `location`; a partial {type:'Point'} would break the
+            // 2dsphere index and crash matching on coordinates destructuring.
             type: {
                 type: String,
                 enum: ['Point'],
@@ -58,13 +55,10 @@ const BondRequestSchema = new Schema<IBondRequest>(
             type: Boolean,
             default: false,
         },
-        // SOFT-DELETE. Un bono que participó de un vínculo COMPLETADO no se puede
-        // borrar de verdad: el BondLink lo referencia y la reseña (BondRating)
-        // cuelga de él. Si se hacía hard-delete, quedaba una referencia colgada y
-        // la reputación —que la persona ganó en intercambios reales— se perdía.
-        // Con esta marca el documento sobrevive para el historial y la reseña,
-        // pero desaparece de los listados y NO consume cupo del bondLimit.
-        // Los bonos sin ningún vínculo se siguen borrando de verdad.
+        // SOFT-DELETE: a bond in a COMPLETED link cannot be hard-deleted (BondLink
+        // references it, BondRating hangs off it, losing earned reputation). It
+        // survives for history/reviews, leaves listings, frees no bondLimit slot.
+        // Unlinked bonds are still hard-deleted.
         isDeleted: {
             type: Boolean,
             default: false,
@@ -79,45 +73,26 @@ const BondRequestSchema = new Schema<IBondRequest>(
             required: true,
             validate: (v: any) => Array.isArray(v) && v.length > 0,
         },
-        // Marca de tiempo del último cómputo de matches (lo fija el robot al
-        // terminar `computeAndCacheMatches`). Permite distinguir en el serving
-        // "aún computando" de "ya computado, cero matches": si es reciente (dentro
-        // del TTL) y no hay cache, es cero matches y el front deja de sondear.
+        // Timestamp of the last match computation (set by the robot after
+        // computeAndCacheMatches). Lets serving tell "still computing" from
+        // "computed, zero matches": recent + no cache means zero, stop polling.
         matchesComputedAt: { type: Date },
-        // AGENDA del próximo recómputo (escala: ver matching.schedule.ts).
-        //
-        // Es un instante FUTURO, no historia. Con esto el sweep es UNA consulta
-        // —`matchesNextAt <= ahora`— resuelta por un solo índice, en vez de una
-        // consulta por nivel de temperatura con rangos distintos.
-        //
-        // El `default` en la ÉPOCA es deliberado y hace dos cosas: un vínculo
-        // recién creado nace con la agenda vencida (se computa enseguida), y el
-        // campo está SIEMPRE PRESENTE — que es lo que permite que el filtro del
-        // sweep sea un rango puro y el índice provea también el orden. Con
-        // `$exists: false` había que meter un `$or`, y ese `$or` forzaba un sort
-        // bloqueante de 32 MB que con lote 1.500 desbordaba. Ver AGENDA_VENCIDA.
-        //
-        // NO reemplaza a `matchesComputedAt`: ése lo usa el serving para
-        // distinguir "todavía computando" de "ya computado, cero matches", y se
-        // deja intacto a propósito.
+        // AGENDA of the next recompute (scale: matching.schedule.ts). A FUTURE
+        // instant, so the sweep is one indexed range query (`matchesNextAt <=
+        // now`). Epoch default: new bonds are due at once and the field is always
+        // present, keeping the sweep a pure range (an $or with $exists forced a
+        // blocking 32 MB sort that overflowed at batch 1.500). Does NOT replace
+        // matchesComputedAt, which serving uses for "still computing".
         matchesNextAt: { type: Date, default: () => new Date(0) },
-        // GENERACIÓN de la caché de matches. La invalidación la incrementa; el
-        // cómputo se queda con la que leyó al empezar y sólo sella su resultado si
-        // no cambió. Es lo que evita que un cómputo que arrancó ANTES de una
-        // invalidación pise el estado con datos viejos: sin esto, ese cómputo
-        // agendaba el vínculo a 24 h con matches obsoletos, y como la invalidación
-        // había encolado un job que BullMQ descartó por jobId ocupado, no lo
-        // rescataba nadie. Antes el mismo agujero se cerraba solo en ≤60 min;
-        // con TTL frío duraba 24 veces más.
+        // Cache GENERATION: invalidation increments it; a compute only seals its
+        // result if the generation it read at start is unchanged. Prevents a
+        // compute started before an invalidation from writing stale matches
+        // (which rescheduled the bond 24 h out and no job rescued it).
         matchesGen: { type: Number, default: 0 },
-        // Última vez que el DUEÑO abrió la pantalla de coincidencias de este
-        // vínculo. Única señal honesta de interés real, y por eso la que decide la
-        // temperatura junto con `createdAt`.
-        //
-        // Por qué no `updatedAt`: el schema tiene `timestamps: true`, así que
-        // nuestra propia contabilidad (sellar matchesComputedAt, el $unset de la
-        // invalidación) lo pisa. `updatedAt` mide nuestro trabajo, no el del
-        // usuario.
+        // Last time the OWNER opened this bond's matches screen: the honest
+        // interest signal that drives temperature together with createdAt.
+        // Not updatedAt, because timestamps:true overwrites it with our own
+        // bookkeeping (stamping matchesComputedAt, invalidation $unset).
         lastServedAt: { type: Date },
     },
     {
@@ -137,11 +112,9 @@ BondRequestSchema.index({ offer: 1 });
 BondRequestSchema.index({ want: 1 });
 BondRequestSchema.index({ user: 1 });
 BondRequestSchema.index({ modality: 1 });
-// El sweep (matching.sweep.ts) filtra bonds activos (status/isPause/isLinked)
-// por `matchesComputedAt` (nunca calculados o más viejos que el TTL) y ordena por
-// ese campo ascendente. Índice COMPUESTO: las igualdades primero y el campo del
-// rango+sort al final, para que Mongo resuelva filtro y orden con un solo índice
-// (evita COLLSCAN + sort en memoria cuando la colección crece).
+// Sweep (matching.sweep.ts) filters active bonds on matchesComputedAt (never
+// computed or older than the TTL) and sorts by it. COMPOSITE index: equality
+// fields first, range+sort field last, so Mongo resolves both with one index.
 BondRequestSchema.index({
     status: 1,
     isPause: 1,
@@ -149,16 +122,11 @@ BondRequestSchema.index({
     matchesComputedAt: 1,
 });
 
-// ESCALA: el índice que el sweep usa DE VERDAD desde el TTL adaptativo. Mismo
-// criterio que el de arriba (igualdades primero, el campo de rango+sort al
-// final) pero sobre `matchesNextAt`, que es lo que el sweep filtra y ordena
-// ahora. Con lote 1.500 y ~100.000 vínculos activos, resolver filtro y orden con
-// un solo índice es la diferencia entre una consulta y un COLLSCAN con sort en
-// memoria cada 5 minutos.
-//
-// El índice de `matchesComputedAt` se CONSERVA: sigue habiendo caminos que
-// filtran por ese campo, y borrarlo es una decisión aparte que se toma con
-// `$indexStats` en la mano, no de memoria.
+// SCALE: the index the sweep actually uses since the adaptive TTL — same layout,
+// on matchesNextAt (what it filters and sorts by now). At batch 1.500 over
+// ~100.000 active links, one index instead of COLLSCAN + in-memory sort every
+// 5 min. The matchesComputedAt index is KEPT: other paths still filter on it;
+// dropping it needs $indexStats evidence.
 BondRequestSchema.index({
     status: 1,
     isPause: 1,
@@ -166,24 +134,17 @@ BondRequestSchema.index({
     matchesNextAt: 1,
 });
 
-// "¿Quién tiene vínculos vivos?" (normalUser/vinculosVivos.ts): con `user` al final
-// el índice CUBRE la consulta y Mongo no lee los documentos, que pesan ~40 KB por
-// los dos vectores de 1536 dimensiones. Medido el 29/9 con 12.000 vínculos: el
-// `distinct` pasó de 8.669 documentos leídos a 0.
+// "Who has live bonds?" (normalUser/vinculosVivos.ts): `user` last makes the
+// index COVER the query, so Mongo skips ~40 KB docs with two 1536-dim vectors.
+// Measured 29/9 with 12.000 bonds: distinct went from 8.669 docs read to 0.
 BondRequestSchema.index({ status: 1, isPause: 1, isLinked: 1, user: 1 });
 
-// HARD race guard contra vínculos duplicados: un mismo usuario no puede tener
-// dos bonds ACTIVOS idénticos (mismo `offer` + `want`), porque siempre darían
-// los mismos matches. Índice único PARCIAL limitado a bonds vivos (esperando
-// link y no linkeados); así un bond borrado o ya linkeado NO bloquea recrear
-// uno igual. `partialFilterExpression` solo admite igualdad, por eso se fija a
-// WAITING_FOR_LINK + isLinked:false.
-//
-// NUANCE: este índice es EXACT-STRING (compara bytes literales), por lo que solo
-// atrapa duplicados idénticos carácter a carácter -> sirve de red anti-carrera en
-// un doble-submit concurrente. La comparación tolerante a mayúsculas/espacios se
-// hace en el servicio (createBondRequestIntoDB) ANTES de crear. Los dos niveles
-// se complementan: servicio = UX (case-insensitive + trim), índice = integridad.
+// Hard race guard: a user cannot have two ACTIVE identical bonds (same offer +
+// want), they would always match the same. Partial unique index limited to live
+// bonds, so a deleted or linked bond does not block recreating one.
+// partialFilterExpression only supports equality, hence WAITING_FOR_LINK +
+// isLinked:false. Exact-string only: catches concurrent double submits; the
+// case/space-tolerant check lives in createBondRequestIntoDB (UX vs integrity).
 BondRequestSchema.index(
     { user: 1, offer: 1, want: 1 },
     {

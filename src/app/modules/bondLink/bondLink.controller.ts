@@ -8,8 +8,8 @@ const sendResponse: typeof originalSendResponse = (res, payload) =>
     originalSendResponse(res, { ...payload, data: publicBondData(payload.data) });
 
 const createBondLink = catchAsync(async (req, res) => {
-    // Anti-IDOR: el servicio verifica que quien llama (req.user.profileId) sea
-    // uno de los participantes. No se confía en el body para saber "quién crea".
+    // Anti-IDOR: the service checks the caller (req.user.profileId) is a
+    // participant; the body is not trusted to say who creates.
     const result = await bondLinkServices.createBondLink(
         req.body,
         req.user.profileId
@@ -59,9 +59,8 @@ const markAsCompleteBond = catchAsync(async (req, res) => {
 });
 
 const rejectBondLink = catchAsync(async (req, res) => {
-    // Anti-IDOR: el servicio verifica que el caller (req.user.profileId) sea
-    // participante. `blockUserIds` es opcional y el servicio lo filtra (excluye al
-    // propio usuario + valida que sean participantes del trueque).
+    // Anti-IDOR: the caller must be a participant. `blockUserIds` is optional and
+    // filtered by the service (excludes self, validates participants).
     const result = await bondLinkServices.rejectBondLink(
         req.user.profileId,
         req.params.id,

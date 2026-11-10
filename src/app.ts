@@ -24,21 +24,18 @@ import router from './app/routes';
 import { estadoRedisPresencia } from './app/socket/presence';
 const app: Application = express();
 app.use(helmet());
-// Detras de reverse proxy (Nginx/ALB): IP real y cookies secure correctas
+// Behind a reverse proxy: real client IP and secure cookies.
 app.set('trust proxy', 1);
 app.use(metricsMiddleware);
 
-// (Webhook de Stripe desmontado: nunca se usó. Los pagos van por PayPal y
-// MercadoPago, con sus webhooks firmados más abajo.)
-// parser
+// Stripe webhook was removed (never used); payments are PayPal/MercadoPago.
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(cookieParser());
 
-// Pagos ANTES del sanitizador global: los webhooks deben ver el payload/query
-// ORIGINAL del proveedor. `sanitizeMongo` borra claves con punto como `data.id`
-// (MercadoPago) y puede alterar el body que PayPal re-verifica contra su firma.
-// Estos handlers tratan la entrada como strings (no la usan como query de Mongo).
+// Payments mount BEFORE the global sanitizer: webhooks must see the provider's
+// ORIGINAL payload (sanitizeMongo strips dotted keys like `data.id` and may break
+// PayPal signature verification).
 app.get('/capture-payment', capturePayPalPayment);
 app.post('/paypal-webhook', paypalWebhook);
 app.post('/mercadopago-webhook', mercadopagoWebhook);
@@ -46,7 +43,7 @@ app.post('/mercadopago-webhook', mercadopagoWebhook);
 app.use(sanitizeMongo);
 app.use(
     cors({
-        // Dominios de produccion y desarrollo local
+        // Production and local dev origins
         origin: [
             'https://bankybondy.com',
             'https://www.bankybondy.com',
@@ -61,42 +58,25 @@ app.use(
         allowedHeaders: ['Content-Type', 'Authorization'],
     })
 );
-//
 app.use('/uploads', express.static('uploads'));
-// application routers ----------------
+// Application routers
 app.use('/', router);
-// `contactLimiter`: endpoint público y sin auth que dispara un email por
-// request. Sin límite, un bucle inundaba la casilla de soporte.
+// `contactLimiter`: public unauthenticated endpoint that sends an email per
+// request; without a limit a loop floods the support inbox.
 app.post('/contact-us', contactLimiter, sendContactUsEmail);
-// (Los webhooks de PayPal/MercadoPago y /capture-payment se montan ARRIBA, antes
-// de sanitizeMongo — fuente de verdad de la acreditación, con payload original.)
-// Metricas Prometheus
+// PayPal/MercadoPago webhooks and /capture-payment mount above, before
+// sanitizeMongo, to keep the original payload.
+// Prometheus metrics
 app.get('/metrics', metricsHandler);
 
-// Liveness: el proceso responde
+// Liveness: process responds
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', uptime: process.uptime() });
 });
 
-// Readiness: dependencias listas.
-//
-// Mongo SIEMPRE gatea: sin base no se puede servir nada útil.
-//
-// Redis se REPORTA pero NO gatea por defecto, y es una desviación deliberada de
-// cómo estaba anotado el pendiente ("/ready no chequea Redis"). El motivo: con
-// Redis caído esta API sigue sirviendo casi todo —los rate limits abren
-// (`passOnStoreError`), el encolado falla y el sweep lo recupera, los sockets
-// funcionan single-instance—. Si `/ready` devolviera 503 por Redis, el balanceador
-// sacaría de rotación a TODAS las instancias a la vez y convertiría una
-// dependencia degradada en una caída total. Sería el mismo error de criterio que
-// el fail-fast que ya se corrigió en `server.ts`: matar todo por algo parcial.
-//
-// Lo que sí cambia: ahora el estado de Redis es VISIBLE, que era el problema real
-// —antes el server se declaraba listo sin decir una palabra— y el monitor externo
-// puede alertar sobre `redis: "caido"` sin tirar el servicio.
-//
-// `READY_REQUIRE_REDIS=true` lo mete en el gate, para quien opere con otra
-// política (p. ej. un despliegue donde Redis sea imprescindible de verdad).
+// Readiness: Mongo always gates; Redis is reported but does not gate by default.
+// A 503 on Redis would pull every instance out of rotation at once, turning a
+// degraded dependency into a full outage. `READY_REQUIRE_REDIS=true` opts in.
 app.get('/ready', (req, res) => {
     const dbReady = mongoose.connection.readyState === 1;
     const redis = estadoRedisPresencia();
@@ -109,8 +89,8 @@ app.get('/ready', (req, res) => {
         status: listo ? 'ready' : 'not-ready',
         db: dbReady ? 'connected' : 'disconnected',
         redis,
-        // Sirve y anda, pero con una dependencia caída: es lo que el monitor
-        // externo tiene que ver para avisar sin sacar el servicio de rotación.
+        // Serving with a degraded dependency: let the external monitor alert
+        // without taking the service out of rotation.
         degraded: listo && !redisOk,
     });
 });
@@ -119,9 +99,9 @@ app.get('/', async (req, res) => {
     res.send({ message: 'Welcome to bankybondy  server' });
 });
 
-// not found (rutas no encontradas)
+// Unmatched routes
 app.use(notFound);
-// global error handler (debe ir el ultimo)
+// Global error handler (must be last)
 app.use(globalErrorHandler);
 
 export default app;

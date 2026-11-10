@@ -47,9 +47,8 @@ function barrier() {
     };
 }
 
-/** Caller owns connection, collection creation and teardown. Only injected,
- * UUID-named collections are accessed; no production model is imported at runtime.
- * Non-database effects are recorded instead of delivered. Throws on failure.
+/** Caller owns connection, collections and teardown; only injected UUID-named
+ * collections are touched and non-database effects are recorded, not delivered.
  */
 export async function runBondLinkLifecycleIntegration({
     links, conversations, startSession,

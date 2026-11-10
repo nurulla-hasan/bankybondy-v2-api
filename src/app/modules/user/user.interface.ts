@@ -16,7 +16,7 @@ export interface TUser {
     isVerified: boolean;
     isResetVerified: boolean;
     codeExpireIn: Date;
-    // C2 hardening: intentos fallidos de OTP y lockout temporal por cuenta.
+    // C2 hardening: failed OTP attempts and temporary per-account lockout.
     verifyAttempts?: number;
     verifyBlockedUntil?: Date | null;
     resetAttempts?: number;
@@ -33,10 +33,7 @@ export interface TLoginUser {
 }
 
 export interface UserModel extends Model<TUser> {
-    // myStaticMethod(): number;
     isUserExists(email: string): Promise<TUser>;
-    //   isUserDeleted(email: string): Promise<boolean>;
-    //   isUserBlocked(email: string): Promise<boolean>;
     isPasswordMatched(
         plainPassword: string,
         hashPassword: string

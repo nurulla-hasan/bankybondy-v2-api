@@ -3,17 +3,9 @@ import Conversation from '../modules/conversation/conversation.model';
 import { emitConversationSnapshots } from './emitConversationSnapshots';
 
 /**
- * Aparecer (o refrescar) el chat de un grupo en la lista de los que pasan a
- * formar parte de él.
- *
- * Sin esto, entrar a un grupo por HTTP no se veía en vivo: el nuevo miembro
- * tenía que cerrar y abrir la app para que la fila apareciera, porque la lista
- * solo se actualiza por el evento `conversation` del socket — y ese evento lo
- * emitía únicamente `send-message`.
- *
- * `userIds` limitado a los que ENTRAN. Al que se le saca del grupo no se le
- * emite nada: su fila desaparece sola al refrescar, y avisarle en vivo sería
- * mandarle información que no necesita.
+ * Push a group's conversation row to newly added members so it shows up live
+ * without an app refresh. Only joining members are notified; removed members
+ * get nothing (their row disappears on refresh).
  */
 export const notifyGroupConversation = async (
     io: IOServer | null,
@@ -37,6 +29,6 @@ export const notifyGroupConversation = async (
             userIds
         );
     } catch {
-        // Best-effort: el alta ya quedó escrita; lo único que se pierde es el aviso.
+        // Best-effort: the membership write already happened; only the live push is lost.
     }
 };

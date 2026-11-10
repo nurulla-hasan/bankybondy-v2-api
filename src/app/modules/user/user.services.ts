@@ -21,14 +21,14 @@ import cascadeDeleteUserData from './cascadeDelete';
 import { TUser, TUserRole } from './user.interface';
 import { User } from './user.model';
 import { createToken } from './user.utils';
-// C2 hardening: OTP con CSPRNG (crypto.randomInt), no Math.random (predecible).
-// randomInt(min, max) es [min, max) → 100000..999999 (6 dígitos).
+// C2 hardening: OTP via CSPRNG (crypto.randomInt), not predictable Math.random.
+// randomInt(min, max) is [min, max) → 6 digits.
 const generateVerifyCode = (): number => {
     return randomInt(100000, 1000000);
 };
 
-// C2 hardening: tras MAX_VERIFY_ATTEMPTS fallos, se bloquea la verificación de esa
-// cuenta por VERIFY_LOCK_MINUTES. Defensa en profundidad sobre el authLimiter por IP.
+// C2 hardening: after MAX_VERIFY_ATTEMPTS failures the account's verification is
+// locked for VERIFY_LOCK_MINUTES (defense in depth over the per-IP authLimiter).
 const MAX_VERIFY_ATTEMPTS = 5;
 const VERIFY_LOCK_MINUTES = 15;
 const registerUser = async (
@@ -66,12 +66,10 @@ const registerUser = async (
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const user = await User.create([userDataPayload], { session });
 
-        // SEGURIDAD (mass-assignment): NO esparcir el body crudo en NormalUser.
-        // El schema de registro no es `.strict()` y `validateRequest` no recorta,
-        // así que sin esto un registrante podía setear subscriptionType/bondLimit/
-        // reputation/bondsPublic/listedInPeople. Solo se aceptan campos de perfil
-        // del alta; el resto queda en su default del schema. (Mismo criterio que
-        // PROFILE_EDITABLE_FIELDS en updateUserProfile.)
+        // Security (mass-assignment): never spread the raw body into NormalUser.
+        // The signup schema isn't `.strict()` and validateRequest doesn't trim, so
+        // otherwise a registrant could set subscriptionType/bondLimit/reputation/
+        // bondsPublic/listedInPeople. Same rule as PROFILE_EDITABLE_FIELDS.
         const REGISTER_ALLOWED_FIELDS: (keyof INormalUser)[] = [
             'name',
             'email',
@@ -82,13 +80,8 @@ const registerUser = async (
             'dateOfBirth',
             'address',
             'bio',
-            // `skills` faltaba: el formulario de registro las hace elegir y el
-            // backend las descartaba en silencio, así que el perfil quedaba sin
-            // ellas y la persona tenía que volver a cargarlas desde su perfil sin
-            // saber por qué. No es un campo sensible (no es subscriptionType ni
-            // bondLimit ni reputation): ya figura en PROFILE_EDITABLE_FIELDS, o
-            // sea que el usuario puede editarlo cuando quiera. Sólo faltaba en el
-            // alta.
+            // `skills` was missing: signup collects them and the backend dropped
+            // them silently. Not sensitive — already in PROFILE_EDITABLE_FIELDS.
             'skills',
         ];
         const normalUserPayload: Record<string, unknown> = {
@@ -109,14 +102,9 @@ const registerUser = async (
             { session }
         );
 
-        // FEATURE DORMIDA (recommendedUsers / "relatives"): el alta pública NO
-        // siembra recomendados. Antes esto leía `payload.recommendedUsers` del
-        // body CRUDO (el schema de registro no es `.strict()` y validateRequest
-        // no recorta), así que un ANÓNIMO podía persistir filas en RecommendedUser
-        // por mass-assignment (P0). Se apaga la vía de escritura anónima detrás de
-        // un flag OFF por defecto, SIN borrar el bloque: cuando se despierte el
-        // feature, se lo alimenta por un endpoint autenticado propio, no por el
-        // signup. Flipear ALLOW_SIGNUP_RECOMMENDED_SEED=true para reactivar.
+        // DORMANT FEATURE (recommendedUsers): public signup does NOT seed
+        // recommendees. It used to read the raw body, letting an anonymous user
+        // mass-assign rows (P0). Flag OFF by default; flip to re-enable.
         const ALLOW_SIGNUP_RECOMMENDED_SEED =
             process.env.ALLOW_SIGNUP_RECOMMENDED_SEED === 'true';
         if (
@@ -164,13 +152,12 @@ const verifyCode = async (email: string, verifyCode: number) => {
     if (!user) {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
-    // C2 hardening: lockout temporal por cuenta tras demasiados fallos.
+    // C2 hardening: temporary per-account lockout after too many failures.
     if (
         user.verifyBlockedUntil &&
         new Date(user.verifyBlockedUntil) > new Date(Date.now())
     ) {
-        // 429 literal (equivalente a TOO_MANY_REQUESTS) para no depender de la
-        // variante de nombre de la versión de http-status instalada en el server.
+        // Literal 429 so we don't depend on the http-status name variant installed.
         throw new AppError(
             429,
             'Too many attempts. Please wait a few minutes and try again.'
@@ -180,12 +167,9 @@ const verifyCode = async (email: string, verifyCode: number) => {
         throw new AppError(httpStatus.BAD_REQUEST, 'Verify code is expired');
     }
     if (verifyCode !== user.verifyCode) {
-        // C2 hardening: cada fallo suma; al llegar al tope se bloquea la cuenta un
-        // rato (y se reinicia el contador). Sin esto, un OTP de 6 dígitos era
-        // brute-forceable dentro de su ventana. El conteo es ATÓMICO ($inc): el
-        // read-modify-write anterior perdía incrementos con intentos concurrentes
-        // (lost update), dejando el lockout burlable al paralelizar. Leemos el
-        // valor ya incrementado y decidimos el bloqueo con él.
+        // C2 hardening: each failure counts; at the cap the account is locked and
+        // the counter resets. Counting is ATOMIC ($inc): the old read-modify-write
+        // lost increments under concurrency, making the lockout bypassable.
         const updated = await User.findOneAndUpdate(
             { email: email },
             { $inc: { verifyAttempts: 1 } },
@@ -204,8 +188,8 @@ const verifyCode = async (email: string, verifyCode: number) => {
         }
         throw new AppError(httpStatus.BAD_REQUEST, "Code doesn't match");
     }
-    // Éxito: verificar, resetear intentos/lockout e INVALIDAR el código (se pone
-    // codeExpireIn en el pasado) para que no pueda reutilizarse.
+    // Success: verify, reset attempts/lockout and INVALIDATE the code (expiry in
+    // the past) so it can't be reused.
     const result = await User.findOneAndUpdate(
         { email: email },
         {
@@ -224,7 +208,6 @@ const verifyCode = async (email: string, verifyCode: number) => {
         );
     }
 
-    // Create JWT tokens
     const jwtPayload = {
         id: result?._id,
         profileId: result?.profileId,
@@ -255,10 +238,8 @@ const resendVerifyCode = async (email: string) => {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
     const verifyCode = generateVerifyCode();
-    // C2 hardening: un código NUEVO reinicia el presupuesto de intentos (0). NO se
-    // limpia un lockout activo (verifyBlockedUntil): si la cuenta está bloqueada,
-    // el reenvío rota el código pero el bloqueo sigue vigente hasta vencer, para
-    // que no sirva como bypass del lockout.
+    // C2 hardening: a NEW code resets the attempt budget (0) but does NOT clear an
+    // active lockout, so resending can't bypass it.
     const updateUser = await User.findOneAndUpdate(
         { email: email },
         {
@@ -297,8 +278,7 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
         throw new AppError(httpStatus.FORBIDDEN, 'Password do not match');
     }
 
-    // Borrado en cascada: limpiar todo lo que referencia al usuario, atómico
-    // donde haya soporte de transacciones (Atlas replica set).
+    // Cascade delete, atomic where transactions are supported (Atlas replica set).
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
@@ -307,9 +287,8 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
             await User.findByIdAndDelete(user.id).session(session);
         });
     } catch (err: any) {
-        // Fallback secuencial SOLO cuando el entorno no soporta transacciones
-        // (Mongo standalone sin replica set). Ante cualquier otro error se
-        // propaga para no arriesgar datos huérfanos por reintentos ciegos.
+        // Sequential fallback ONLY when the environment lacks transactions
+        // (standalone Mongo). Any other error propagates: blind retries risk orphans.
         const message: string = err?.message || '';
         const code = err?.code ?? err?.codeName;
         const isTxnUnsupported =
@@ -325,7 +304,7 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
             throw err;
         }
 
-        // Entorno sin transacciones (Mongo standalone): best-effort secuencial.
+        // No transactions (standalone Mongo): best-effort sequential delete.
         await cascadeDeleteUserData(user.profileId);
         await NormalUser.findByIdAndDelete(user.profileId);
         await User.findByIdAndDelete(user.id);
@@ -346,19 +325,15 @@ const getMyProfile = async (userData: JwtPayload) => {
     return result;
 };
 
-// all cron jobs for users---
+// User cleanup cron jobs.
 
 cron.schedule('*/2 * * * *', async () => {
     try {
         const now = new Date();
 
-        // Find unverified users whose expiration time has passed.
-        // SEGURIDAD (defensa en profundidad, P0): SOLO se barren cuentas RECIÉN
-        // creadas (altas incompletas de las últimas 24h). Un signup sin verificar
-        // se borra a los ~minutos (código vence en 5', el cron corre c/2'), así
-        // que la ventana de 24h sobra para la limpieza legítima; pero garantiza
-        // que una cuenta ESTABLECIDA nunca pueda ser elegible para borrado
-        // automático aunque algún otro path la deje isVerified:false por error.
+        // Security (defense in depth, P0): only accounts created within the last
+        // 24h are swept — incomplete recent signups. This guarantees an ESTABLISHED
+        // account is never auto-deleted even if some path leaves it isVerified:false.
         const deletableSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
         const expiredUsers = await User.find({
             isVerified: false,
@@ -369,17 +344,14 @@ cron.schedule('*/2 * * * *', async () => {
         if (expiredUsers.length > 0) {
             const expiredUserIds = expiredUsers.map((user) => user._id);
 
-            // Delete corresponding NormalUser documents
             const normalUserDeleteResult = await NormalUser.deleteMany({
                 user: { $in: expiredUserIds },
             });
 
-            // Delete the expired User documents
             const userDeleteResult = await User.deleteMany({
                 _id: { $in: expiredUserIds },
             });
 
-            // delete recommended users
             const recommendedUserDeleteResult =
                 await RecommendedUser.deleteMany({
                     recommendByUserId: { $in: expiredUserIds },
@@ -412,10 +384,9 @@ const changeUserStatus = async (id: string) => {
         { new: true, runValidators: true }
     );
 
-    // Ocultar/mostrar los audios del usuario según el nuevo estado. IMPORTANTE:
-    // Audio.user guarda el profileId (NormalUser._id), NO el User._id — antes se
-    // filtraba por `id` (User._id) y no matcheaba ninguna fila, así que el bloqueo
-    // no ocultaba nada. Además lo hacemos simétrico: al desbloquear, se reactivan.
+    // Hide/show the user's audios. Audio.user stores the profileId (NormalUser._id),
+    // NOT the User._id: filtering by `id` matched nothing, so blocking hid nothing.
+    // Symmetric: unblocking reactivates them.
     if (user.profileId) {
         await Audio.updateMany(
             { user: user.profileId },

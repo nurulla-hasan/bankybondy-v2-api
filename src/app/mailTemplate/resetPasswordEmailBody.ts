@@ -1,7 +1,6 @@
 import { wrapEmail, codeBox, BRAND_FONT, escHtml } from './brandAssets';
 
-// Correo de RESET de contraseña (código OTP). Misma cáscara de marca que la
-// activación; cambia el título y el copy.
+// Password reset email (OTP code). Same brand shell as activation; only title and copy differ.
 const resetPasswordEmailBody = (name: string, resetCode: number): string => {
     const body = `
                     <tr>

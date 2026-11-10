@@ -3,8 +3,8 @@ import Notification from '../modules/notification/notification.model';
 import { USER_ROLE } from '../modules/user/user.constant';
 
 const getAdminNotificationCount = async (adminId?: string) => {
-  // No vistas por ESTE admin = su profileId NO esta en `seenBy` (antes comparaba
-  // el array con el ROL 'superAdmin', que nunca casaba). Requiere el id del admin.
+  // Unseen by THIS admin = profileId not in `seenBy` (the old check compared the
+  // array against the 'superAdmin' role and never matched). Needs the admin id.
   const adminObjId = adminId ? new mongoose.Types.ObjectId(adminId) : undefined;
   const unseenCount = await Notification.countDocuments({
     ...(adminObjId ? { seenBy: { $ne: adminObjId } } : {}),

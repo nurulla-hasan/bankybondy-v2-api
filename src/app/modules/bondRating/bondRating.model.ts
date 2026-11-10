@@ -32,15 +32,14 @@ const bondRatingSchema = new Schema<IBondRating>(
             type: String,
             required: true,
         },
-        // D.3 (Tanda 2): comentario breve opcional (max 500 chars) para mostrar
-        // en la vista publica del perfil junto a la estrella.
+        // Optional short comment shown on the public profile.
         comment: {
             type: String,
             trim: true,
             maxlength: 500,
         },
-        // Rating en suspenso (ver interface): la reputación solo cuenta `applied:true`.
-        // Se pasa a true en lote cuando el trueque cierra (todos completan).
+        // Pending rating: reputation only counts `applied:true`, set in bulk
+        // when the trade closes.
         applied: {
             type: Boolean,
             default: false,
@@ -49,58 +48,48 @@ const bondRatingSchema = new Schema<IBondRating>(
     { timestamps: true }
 );
 
-// Un usuario solo puede valorar a otro una vez por bondLink (evita doble voto)
+// One rating per user pair per bondLink (no double voting).
 bondRatingSchema.index(
     { rated: 1, ratedBy: 1, bondLink: 1 },
     { unique: true }
 );
 
-// El batch de cierre (updateMany + distinct por `bondLink`) y el sweep de
-// reconciliación filtran por `bondLink` — que NO es prefijo del índice unique
-// de arriba (va 3ro), así que sin este índice serían COLLSCAN en cada cierre de
-// trueque. `applied` de sufijo cubre `{bondLink, applied:{$ne:true}}`.
+// The close batch and reconciliation sweep filter by `bondLink`, which is NOT a
+// prefix of the unique index above; without this, every close would COLLSCAN.
+// The `applied` suffix covers `{bondLink, applied:{$ne:true}}`.
 bondRatingSchema.index({ bondLink: 1, applied: 1 });
 
-// ---------------------------------------------------------------------------
-// Hooks: mantener fresca la reputacion cacheada de NormalUser tras cualquier
-// mutacion de BondRating. Necesario para que el filtro sort=reputation (que
-// ordena por reputation.score) refleje datos reales.
-//
-// `recomputeReputation` vive en reputation.util, que a su vez importa ESTE
-// modelo -> dependencia circular. Se evita con import() perezoso dentro del
-// hook (se resuelve en runtime, cuando ambos modulos ya estan cargados).
-// ---------------------------------------------------------------------------
+// Hooks keep the cached NormalUser reputation fresh after any BondRating mutation.
+// `recomputeReputation` imports this model, so it is lazily imported to avoid a
+// circular dependency.
 async function recomputeAfterChange(ratedId: unknown): Promise<void> {
-    if (!ratedId) return; // guard: documento/id ausente
+    if (!ratedId) return; // guard: missing id
     try {
         const { recomputeReputation } = await import('./reputation.util');
         await recomputeReputation(String(ratedId));
     } catch (err) {
-        // Nunca romper la operacion original por un fallo del recalculo.
+        // Never break the original operation.
         console.error('[reputation] hook recompute failed', err);
     }
 }
 
-// Alta / edicion via documento (.save()).
+// Create/edit via document (.save()).
 bondRatingSchema.post('save', function (doc) {
     void recomputeAfterChange(doc?.rated);
 });
 
-// Alta / edicion via query (findOneAndUpdate, incluido el upsert de addRating).
+// Create/edit via query (includes the addRating upsert).
 bondRatingSchema.post('findOneAndUpdate', function (doc) {
     void recomputeAfterChange(doc?.rated);
 });
 
-// Borrado que devuelve el documento borrado: tiene `rated` disponible.
+// Delete returning the document: `rated` is available.
 bondRatingSchema.post('findOneAndDelete', function (doc) {
     void recomputeAfterChange(doc?.rated);
 });
 
-// Nota: no registramos hooks de deleteOne/deleteMany por query. No existe un
-// flujo de borrado directo de reseñas en la app; los caminos reales (alta,
-// edicion, upsert y borrado con documento) ya quedan cubiertos arriba. Ademas,
-// avg/count se derivan en vivo en los endpoints y el backfill recalcula el
-// cache, asi que un borrado masivo eventual no dejaria el promedio mal.
+// No query deleteOne/deleteMany hooks: no direct review-deletion flow exists;
+// avg/count are derived live and the backfill recomputes the cache.
 
 const BondRating = model<IBondRating>('BondRating', bondRatingSchema);
 export default BondRating;

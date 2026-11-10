@@ -66,7 +66,7 @@ export const uploadFile = () => {
         ];
 
         if (file.fieldname === undefined) {
-            // Allow requests without any files
+            // Allow requests without files
             cb(null, true);
         } else if (allowedFieldnames.includes(file.fieldname)) {
             if (

@@ -9,8 +9,7 @@ export interface IConversation {
     type: (typeof ENUM_CONVERSATION_TYPE)[keyof typeof ENUM_CONVERSATION_TYPE];
     bondLink: ObjectId | null;
     chatGroup: ObjectId | null;
-    // B.7 (Tanda 2): participantes que ocultaron esta conversacion SOLO para si
-    // mismos (soft-hide). No borra datos del otro participante.
+    // Participants who soft-hid this conversation for themselves only; the other side keeps its data.
     hiddenBy: ObjectId[];
     createdAt: Date;
     updatedAt: Date;

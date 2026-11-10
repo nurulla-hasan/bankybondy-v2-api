@@ -5,7 +5,7 @@ import SearchController from './search.controller';
 
 const router = express.Router();
 
-// Busqueda global ligera (personas, bonos y audios) para el usuario autenticado.
+// Lightweight global search (people, bonds and audios) for the authenticated user.
 router.get('/global', auth(USER_ROLE.user), SearchController.globalSearch);
 
 export const searchRoutes = router;

@@ -1,15 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable no-console */
-/* Webhook firmado de PayPal — FUENTE DE VERDAD de la acreditación.
- *
- * A diferencia del redirect del navegador (que puede no completarse si el
- * usuario cierra la pestaña), PayPal envía este webhook server-to-server y
- * lo firma. Verificamos la firma contra PayPal y recién ahí acreditamos.
- * La acreditación es idempotente (Transaction.transactionId único), así que
- * es seguro que dispare junto con el redirect: solo uno acredita.
- *
- * Configuración: PAYPAL_WEBHOOK_ID (id del webhook creado en el panel de PayPal).
- */
+/* Signed PayPal webhook — SOURCE OF TRUTH for crediting. Signature is verified first;
+ * crediting is idempotent (unique transactionId), so it is safe alongside the redirect. */
 import paypal from '@paypal/checkout-server-sdk';
 import axios from 'axios';
 import { Request, Response } from 'express';
@@ -18,7 +10,7 @@ import { ENUM_PAYMENT_PURPOSE } from '../utilities/enum';
 import paypalClient from '../utilities/paypal';
 import { creditDonation, creditSubscription } from './creditPayment';
 
-// Base de la API REST de PayPal (deriva del modo si no está seteada).
+// PayPal REST API base (derived from the mode when not set).
 const apiBase = (): string =>
     config.paypal.base_url ||
     (config.paypal.mode === 'live'
@@ -89,7 +81,7 @@ const verifySignature = async (req: Request): Promise<boolean> => {
 };
 
 const paypalWebhook = async (req: Request, res: Response) => {
-    // 1) Verificar firma. Si no es válida, rechazar.
+    // 1) Verify signature; reject when invalid.
     const ok = await verifySignature(req);
     if (!ok) {
         return res
@@ -97,8 +89,8 @@ const paypalWebhook = async (req: Request, res: Response) => {
             .json({ success: false, message: 'Invalid webhook signature' });
     }
 
-    // 2) Procesar solo capturas completadas. Errores → 500 para que PayPal
-    //    reintente (la acreditación es idempotente, así que es seguro).
+    // 2) Process only completed captures. Errors → 500 so PayPal retries
+    //    (crediting is idempotent, so a retry is safe).
     try {
         const event = req.body;
         if (event?.event_type === 'PAYMENT.CAPTURE.COMPLETED') {
@@ -111,8 +103,8 @@ const paypalWebhook = async (req: Request, res: Response) => {
             let customId: string | undefined = resource?.custom_id;
             let purpose: string | undefined;
 
-            // El propósito (suscripción/donación) vive en reference_id de la
-            // orden; lo leemos de la orden (igual que el flujo de captura).
+            // The purpose (subscription/donation) lives in the order's reference_id;
+            // read it from the order (same as the capture flow).
             if (orderId) {
                 const orderReq = new paypal.orders.OrdersGetRequest(orderId);
                 const orderRes = await paypalClient.execute(orderReq);
@@ -122,12 +114,9 @@ const paypalWebhook = async (req: Request, res: Response) => {
             }
 
             if (customId && transactionId) {
-                // Defensa en profundidad: estos webhooks se montan ANTES de
-                // sanitizeMongo, así que forzamos a string los valores que entran
-                // a queries de Mongo (findById / findByIdAndUpdate). Si el body
-                // trajera `custom_id: {$ne:null}`, String() lo vuelve
-                // "[object Object]" y el findById falla sin matchear. La firma de
-                // PayPal ya es la barrera principal; esto es la red de seguridad.
+                // Defense in depth: these webhooks mount BEFORE sanitizeMongo, so force
+                // Mongo query inputs to string (e.g. `{$ne:null}` becomes "[object Object]"
+                // and findById matches nothing). The signature is the main barrier.
                 const safeCustomId = String(customId);
                 const safeTransactionId = String(transactionId);
                 if (purpose === ENUM_PAYMENT_PURPOSE.SUBSCRIPTION) {

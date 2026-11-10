@@ -1,12 +1,11 @@
-/* Funciones de puntaje PURAS del matcheo de bonds.
- * No tocan la base de datos ni el estado: reciben números y devuelven números,
- * lo que las hace fáciles de testear y ajustar. */
+/* Pure bond-matching scoring: no DB or state touched — numbers in, numbers out,
+ * which keeps it easy to test and tune. */
 import { MATCHING } from './matching.config';
 
 export const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
 
-/** Calidad semántica de un match, ponderando el eslabón más débil.
- *  s1 = coseno(miDeseo, suOferta); s2 = coseno(suDeseo, miOferta). */
+/** Semantic match quality, weighting the weakest link.
+ *  s1 = cos(myWant, theirOffer); s2 = cos(theirWant, myOffer). */
 export const semanticQuality = (
     s1: number,
     s2: number,
@@ -17,23 +16,23 @@ export const semanticQuality = (
     return clamp01(wMin * min + (1 - wMin) * mean);
 };
 
-/** Alternativa parameter-free que castiga el desbalance por sí sola. */
+/** Parameter-free alternative that penalizes imbalance on its own. */
 export const harmonicMean = (s1: number, s2: number): number =>
     s1 + s2 === 0 ? 0 : clamp01((2 * s1 * s2) / (s1 + s2));
 
-/** Un par califica solo si ambos sentidos pasan el umbral (gate duro). */
+/** Hard gate: both directions must be >= minScore (inclusive). */
 export const passesGate = (
     s1: number,
     s2: number,
     minScore: number = MATCHING.minScore
 ): boolean => s1 >= minScore && s2 >= minScore;
 
-/** La calidad de un ciclo es su eslabón más débil (el cuello de botella). */
+/** A cycle's quality is its weakest link (the bottleneck). */
 export const cycleQuality = (edgeScores: number[]): number =>
     edgeScores.length ? Math.min(...edgeScores) : 0;
 
-/** Reputación bayesiana normalizada 0–1.
- *  Con pocas valoraciones tiende al prior neutro (ni perfecto ni pésimo). */
+/** Bayesian reputation normalized 0–1: with few ratings it leans to the neutral
+ *  prior (neither perfect nor terrible). */
 export const bayesianReputation = (
     avgStars: number,
     count: number,
@@ -45,14 +44,14 @@ export const bayesianReputation = (
     return clamp01((priorWeight * prior + count * observed) / (priorWeight + count));
 };
 
-/** Factor de reputación de un match: el eslabón más débil entre los participantes.
- *  (Para un par, es la reputación de la contraparte.) */
+/** Match reputation factor: the weakest link among participants (for a pair,
+ *  the counterpart's reputation). */
 export const reputationFactor = (participantScores: number[]): number =>
     participantScores.length
         ? Math.min(...participantScores)
         : clamp01(MATCHING.reputation.prior);
 
-/** Cercanía: 1 = mismo lugar; 0 = en el borde del radio. Online/sin geo = 1. */
+/** Proximity: 1 = same place, 0 = at the radius edge. Online/no geo = 1. */
 export const proximityFactor = (
     distanceKm?: number,
     radiusKm?: number
@@ -61,7 +60,7 @@ export const proximityFactor = (
     return clamp01(1 - distanceKm / radiusKm);
 };
 
-/** Frescura: decaimiento exponencial por antigüedad de la última actividad. */
+/** Freshness: exponential decay by age of last activity. */
 export const freshnessFactor = (
     updatedAt?: Date | string,
     halfLifeDays: number = MATCHING.freshnessHalfLifeDays
@@ -73,21 +72,10 @@ export const freshnessFactor = (
     return clamp01(Math.pow(0.5, days / halfLifeDays));
 };
 
-/** Puntaje de un borde con comodín "surprise" (simétrico deseo/oferta).
- *  Si el DESEO es surprise ("acepto cualquier oferta") O la OFERTA es surprise
- *  ("doy lo que busques"), el borde vale `floor + margin·sim`. Si no hay comodín,
- *  devuelve la similitud tal cual.
- *  - `floor` (default 0.6): el comodín es "aceptable" sin inflar el eslabón débil.
- *  - `floor + margin` (default 0.8): techo, para que un match genuino fuerte gane. */
-/* Puntaje de un eslabón con comodín. Modelo de TRES niveles:
- *  - concreto ↔ concreto  → similitud real (sim).
- *  - comodín  ↔ CONCRETO  → piso + bonus. El comodín LLENA una necesidad
- *    concreta (se amolda a algo definido) → vale MÁS que dos comodines sueltos.
- *  - comodín  ↔ comodín   → solo el piso (doble sorpresa: nadie definió nada).
- * Así 'surprise' prefiere explícitamente un concreto por sobre otro surprise, y
- * un match concreto fuerte (sim alta) sigue ganándole a cualquier comodín.
- * NOTA: la similitud del token "surprise" contra otra cosa no tiene señal útil
- * (se parece solo a sí misma), por eso NO se usa `sim` en los casos comodín. */
+/** Wildcard "surprise" link score. Bands: concrete↔concrete → sim; wildcard↔
+ *  concrete → floor + concreteBonus (fills a concrete need, worth more);
+ *  wildcard↔wildcard → floor only. `sim` is unused for wildcards.
+ *  Defaults: floor 0.6, ceiling (floor + margin) 0.8. */
 export const surpriseAdjustedScore = (
     sim: number,
     wantIsSurprise: boolean,
@@ -100,15 +88,10 @@ export const surpriseAdjustedScore = (
     return clamp01(bothSurprise ? floor : floor + concreteBonus);
 };
 
-/** Puntaje de una arista "deseo ← oferta" que involucra el comodín 'vacío' (nada).
- *  Implementa la fila/columna "Vacío" de la tabla de la spec (Matcheo-Comodines-Spec):
- *   - vacío(deseo) ← vacío(oferta)                → `encounter` (ALTO): el encuentro.
- *   - vacío(deseo) ← sorpresa  /  sorpresa(deseo) ← vacío → `mixed` (sólido, pero
- *     por debajo del encuentro: debe superar `minScore` con margen).
- *   - vacío(deseo) ← concreto  /  concreto(deseo) ← vacío → 0 (EXCLUIDO).
- *  A 'vacío' no le sirve la similitud del vector (no tiene señal semántica: se
- *  parece solo a sí mismo), por eso se resuelve SOLO por banda. Llamar únicamente
- *  cuando hay 'vacío' en al menos un lado. */
+/** Edge score for the 'vacío' (nothing) wildcard, resolved by band only (its
+ *  vector has no semantic signal). Bands: empty↔empty → encounter (high);
+ *  empty↔surprise → mixed (solid, must clear minScore); empty↔concrete → 0.
+ *  Call only when at least one side is empty. */
 export const emptyEdgeScore = (
     wantIsEmpty: boolean,
     wantIsSurprise: boolean,
@@ -117,19 +100,16 @@ export const emptyEdgeScore = (
     encounter: number = MATCHING.emptyEncounter,
     mixed: number = MATCHING.emptyMixed
 ): number => {
-    if (wantIsEmpty && offerIsEmpty) return clamp01(encounter); // encuentro
-    if (wantIsEmpty) return offerIsSurprise ? clamp01(mixed) : 0; // deseo vacío ← sorpresa/concreto
-    // offerIsEmpty && !wantIsEmpty: oferta vacía → deseo NO vacío.
-    return wantIsSurprise ? clamp01(mixed) : 0; // sorpresa quiere algo=mixed; concreto=excluido
+    if (wantIsEmpty && offerIsEmpty) return clamp01(encounter); // the encounter
+    if (wantIsEmpty) return offerIsSurprise ? clamp01(mixed) : 0; // empty want ← surprise/concrete
+    // Offer empty, want not empty.
+    return wantIsSurprise ? clamp01(mixed) : 0; // surprise want = mixed; concrete = excluded
 };
 
-/** Factor de modalidad: preferencia SUAVE (no filtro).
- *  - Mismo formato → 1 (sin penalización).
- *  - Formato ausente en cualquiera de los dos (datos legado / bond sin modalidad)
- *    → 1 (tolerante: no penaliza ni excluye).
- *  - Ambos formatos explícitos y DISTINTOS → `mismatch` (< 1, baja el score).
- *  Con `cross = false` (filtro duro por env) siempre devuelve 1: en ese modo los
- *  cross-formato ni siquiera llegan a puntuarse (se filtran en la recuperación). */
+/** Modality factor: a SOFT preference, not a filter. Same format → 1; missing
+ *  format on either side (legacy data) → 1 (tolerant); two explicit, different
+ *  formats → `mismatch` (< 1). With `cross = false` (hard env filter) always 1,
+ *  since cross-format pairs never reach scoring. */
 export const modalityFactor = (
     a: string | undefined,
     b: string | undefined,
@@ -148,7 +128,7 @@ export interface MatchScoreParts {
     freshness: number;
 }
 
-/** Puntaje final compuesto (0–1) con pesos ajustables. */
+/** Final composite score (0–1) with adjustable weights. */
 export const finalMatchScore = (
     parts: MatchScoreParts,
     weights = MATCHING.weights

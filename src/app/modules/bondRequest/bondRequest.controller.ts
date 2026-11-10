@@ -96,7 +96,7 @@ const getBondRequestsByUser = catchAsync(async (req, res) => {
     const result = await bondRequestService.getBondRequestsByUser(
         req.params.userId,
         req.user.profileId,
-        // Buscador de vínculos dentro del perfil (opcional).
+        // Optional bond search term scoped to the profile.
         typeof req.query.searchTerm === 'string'
             ? req.query.searchTerm
             : undefined,

@@ -1,20 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * Migración idempotente para las notificaciones de match (corre una vez en el
- * boot de la API, fire-and-forget). Dos pasos, en ESTE orden:
- *
- * 1) COLAPSA las notificaciones MATCH duplicadas por (receiver, redirectId):
- *    conserva la MÁS NUEVA (mayor createdAt) y borra el resto. Es necesario
- *    porque el comportamiento anterior creaba una fila por cada pasada del robot,
- *    y quedaron varias "Nuevo match" del mismo vínculo en la campana.
- *
- * 2) Crea un ÍNDICE ÚNICO PARCIAL (receiver, redirectId | type=MATCH): garantiza
- *    a nivel base de datos UNA sola notificación de match por vínculo, aun si dos
- *    pasadas del robot corren a la vez (red de seguridad de la condición de
- *    carrera). Va DESPUÉS de la limpieza: con duplicados presentes, fallaría.
- *
- * Idempotente: tras la primera corrida no quedan duplicados (paso 1 = no-op) y el
- * índice ya existe (paso 2 = no-op). Nunca aborta el boot: los errores se loguean.
+ * Idempotent match-notification migration (runs once at boot, fire-and-forget):
+ * 1) collapse duplicate MATCH rows by (receiver, redirectId), keeping the newest;
+ * 2) then create the PARTIAL UNIQUE index (receiver, redirectId | type=MATCH).
+ * Errors are logged; boot is never aborted.
  */
 import { errorLogger, logger } from '../../shared/logger';
 import { ENUM_NOTIFICATION_TYPE } from '../../utilities/enum';
@@ -28,9 +17,9 @@ export const collapseMatchNotifications = async (): Promise<void> => {
 
     const coll = Notification.collection;
 
-    // --- Paso 1: colapsar duplicados existentes ---
-    // Ordenar por createdAt desc ANTES del $group: el $push conserva ese orden, así
-    // ids[0] es la más nueva (la que se conserva).
+    // --- Step 1: collapse existing duplicates ---
+    // Sort by createdAt desc BEFORE $group: $push keeps that order, so ids[0] is
+    // the newest one (the one kept).
     const groups = await coll
         .aggregate(
             [
@@ -58,7 +47,7 @@ export const collapseMatchNotifications = async (): Promise<void> => {
 
     const toDelete: any[] = [];
     for (const g of groups as any[]) {
-        // Conservar ids[0] (la más nueva); borrar el resto.
+        // Keep ids[0] (newest); delete the rest.
         for (let i = 1; i < g.ids.length; i++) toDelete.push(g.ids[i]);
     }
 
@@ -69,7 +58,7 @@ export const collapseMatchNotifications = async (): Promise<void> => {
         );
     }
 
-    // --- Paso 2: índice único parcial (una MATCH por vínculo) ---
+    // --- Step 2: partial unique index (one MATCH per trade) ---
     try {
         await coll.createIndex(
             { receiver: 1, redirectId: 1 },
@@ -82,8 +71,8 @@ export const collapseMatchNotifications = async (): Promise<void> => {
             }
         );
     } catch (err) {
-        // No aborta el boot: sin el índice, el upsert de sendNotification igual
-        // colapsa en la práctica (el robot serializa por bond). Se deja visible.
+        // Does not abort boot: without the index, the sendNotification upsert
+        // still collapses in practice (the robot serializes per bond).
         errorLogger.error(
             '[migration] createIndex uniq_match_notif_per_vinculo falló:',
             (err as Error)?.message

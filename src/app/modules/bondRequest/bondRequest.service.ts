@@ -44,55 +44,23 @@ import { hasBondIdentity } from './bondIdentity';
 import { createBondIntegrity } from './bondIntegrity';
 import Conversation from '../conversation/conversation.model';
 
-// Mensaje único para el conflicto de vínculo duplicado. Se reutiliza tanto en
-// el chequeo previo (case-insensitive + trim) como en el catch del E11000
-// (red anti-carrera del índice único parcial), para que el front reciba SIEMPRE
-// el mismo texto sin importar cuál de los dos niveles lo atrapó.
+// Single duplicate-bond message: used by the pre-check and the E11000 catch so the
+// client always gets the same text, whichever layer caught it.
 const DUPLICATE_BOND_MESSAGE =
     'Ya tenés un vínculo igual (mismo "ofrezco" y "busco").';
 
-// Escapa los metacaracteres de una regex para poder comparar un string literal
-// de forma case-insensitive/anclada sin que el contenido del usuario altere el
-// patrón (evita inyección de regex y errores de sintaxis).
+// Escape regex metacharacters so a literal user string can be matched
+// case-insensitively/anchor without altering the pattern (no injection, no syntax errors).
 const escapeRegex = (s: string) =>
     s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/* QUÉ OCUPA CUPO DEL `bondLimit` — decidido por Emilio, 11/9.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * **UN VÍNCULO TIENE TRES ESTADOS: ACTIVO, PAUSADO Y ELIMINADO. NO EXISTE
- * "VÍNCULO COMPLETADO".**
- *
- * Esa es la definición de producto, y es lo que ordena todo lo demás. Concretar
- * un trueque NO retira el vínculo: si la persona no lo pausó ni lo eliminó,
- * **sigue corriendo**, porque lo más probable es que quiera repetirlo. Quien
- * ofrece clases de guitarra y consiguió una bici no dejó de ofrecer clases de
- * guitarra.
- *
- * Por eso el cupo cuenta TODO lo que la persona tenga publicado y no haya
- * borrado: activos y pausados. El ciclo de vida del trueque vive en `BondLink`
- * (Ongoing/Completed/Canceled) y es OTRA cosa — no toca al vínculo.
- *
- * ⚠️ HISTORIA DE ESTE COMENTARIO, para que no se repita. Una versión anterior
- * filtraba por `status ∈ {WAITING_FOR_LINK, ONGOING}` para que "los completados
- * no ocuparan lugar". Estaba mal dos veces:
- *   1. Era **inerte**: `BondRequest.status` no se escribe NUNCA después de crear
- *      (grepeado: no hay una sola escritura a ONGOING/COMPLETED/CANCELED en todo
- *      el árbol). Todo queda en WAITING_FOR_LINK, así que el filtro matcheaba
- *      exactamente el mismo conjunto que sin él.
- *   2. Y estaba mal **de intención**: retirar un vínculo al completar el trueque
- *      lo sacaría del pool de matcheo, que es justo lo contrario de lo que el
- *      producto quiere.
- * Se vuelve al criterio simple, que resultó ser el correcto. Liberar cupo es una
- * decisión de la persona: elimina los que ya no quiere.
- *
- * ═════════════════════════════════════════════════════════════════════════════
- * ES UNA CONSTANTE Y NO DOS LITERALES A PROPÓSITO. El cupo se cuenta en DOS
- * lugares —el fast-fail barato y el autoritativo dentro de la transacción— y si
- * alguna vez difirieran, los dos chequeos darían veredictos distintos sobre la
- * misma persona: el barato la dejaría pasar y el de adentro la rechazaría, o al
- * revés. Con una sola definición eso es imposible. Esa parte sí valía la pena.
- */
+/* What counts toward `bondLimit`: every bond the user has not deleted (active or
+ * paused). There is no "completed" state — finishing a trade does not retire the
+ * bond, only pause/delete do, and the `BondLink` lifecycle is unrelated. An older
+ * version filtered by `status`, which was inert (`BondRequest.status` is never
+ * rewritten after create) and wrong in intent (it removed completed bonds from the
+ * matching pool). One shared constant so the fast-fail and the in-transaction check
+ * can never disagree. */
 export const FILTRO_CUPO_VINCULOS = {
     isDeleted: { $ne: true },
 };
@@ -103,8 +71,7 @@ const createBondRequestIntoDB = async (
 ) => {
     const [user, currentBondCount] = await Promise.all([
         NormalUser.findById(userId),
-        // Sólo los vínculos VIVOS ocupan cupo. Ver FILTRO_CUPO_VINCULOS arriba
-        // para el criterio completo y por qué es una constante compartida.
+        // Only live bonds consume quota; see FILTRO_CUPO_VINCULOS for the rule.
         BondRequest.countDocuments({ user: userId, ...FILTRO_CUPO_VINCULOS }),
     ]);
 
@@ -112,11 +79,8 @@ const createBondRequestIntoDB = async (
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
-    // Limite de vinculos. bondLimit por defecto = 25 (cuenta gratis).
-    // Con `>=` una cuenta gratis crea EXACTAMENTE 25 (cuando ya tiene 25,
-    // el intento 26 se bloquea). Las suscripciones pagas suben bondLimit.
-    // Se devuelve 403 + code 'BOND_LIMIT_REACHED' para que el front redirija
-    // de forma inequivoca a la pantalla de suscripciones.
+    // Bond limit: default 25 (free tier). `>=` lets a free account create exactly
+    // 25. 403 + 'BOND_LIMIT_REACHED' lets the front route to subscriptions.
     if (currentBondCount >= (user.bondLimit ?? 25)) {
         throw new AppError(
             httpStatus.FORBIDDEN,
@@ -131,13 +95,9 @@ const createBondRequestIntoDB = async (
     if (await hasBondIdentity(BondRequest, userId, offerTrimmed, wantTrimmed)) {
         throw new AppError(httpStatus.CONFLICT, DUPLICATE_BOND_MESSAGE);
     }
-    // Censura de los TRES textos visibles (ofrezco/busco/descripción) en UNA sola
-    // llamada batcheada: el prompt de intención se paga 1 vez en vez de 3, y son
-    // 2 requests a OpenAI por vínculo (1 moderación + 1 intención) en vez de 6.
-    // Capa COMPLETA (lista dura + moderación gratis + intención gpt-4o-mini, que
-    // agarra frases contextuales tipo "drug dealer"). Veredicto POR CAMPO. La
-    // descripción vacía devuelve safe. Bloqueante: si algo no pasa, error y NO se
-    // crea nada (los embeddings ya calculados se descartan).
+    // Censor all three visible texts (offer/want/description) in ONE batched call:
+    // 2 OpenAI requests per bond instead of 6. Full pipeline, per-field verdict,
+    // blocking (embeddings are discarded on failure). Empty description is safe.
     const [safety, offerVector, wantVector] = await Promise.all([
         isTextSafeBatch([offerTrimmed, wantTrimmed, payload.description ?? '']),
         generateEmbedding(offerTrimmed),
@@ -145,19 +105,16 @@ const createBondRequestIntoDB = async (
     ]);
     const [offerCheck, wantCheck, descCheck] = safety;
 
-    // La censura MANDA: si algo no pasa, error inmediato (embeddings descartados).
-    // assertTextAllowed distingue "no permitido" (400) de "moderación caída,
-    // reintentá" (503) — antes un fallo transitorio de OpenAI salía como 400
-    // "no permitido" sobre contenido que podía estar perfecto.
+    // Moderation wins: assertTextAllowed distinguishes "not allowed" (400) from
+    // "moderation down, retry" (503) — a transient OpenAI failure used to surface
+    // as 400 "not allowed" on content that could be fine.
     assertTextAllowed(offerCheck, 'Offer');
     assertTextAllowed(wantCheck, 'Want');
     assertTextAllowed(descCheck, 'Description');
 
-    // Herencia de ubicacion (best-effort): si el payload no trae coordenadas
-    // usables y el creador tiene una ubicacion guardada en su perfil, el bond
-    // hereda esa ubicacion. No inventa radio ni toca la modalidad (los bonds
-    // online siguen siendo globales; el matcheo ya ignora la geo en online). Si
-    // el usuario no tiene ubicacion, se conserva el comportamiento actual.
+    // Location inheritance (best-effort): if the payload has no usable coords and
+    // the creator has saved ones, the bond inherits them. Radius and modality are
+    // untouched; online bonds stay global (matching ignores geo for online).
     const payloadCoords = (payload as any)?.location?.coordinates as
         | number[]
         | undefined;
@@ -176,23 +133,16 @@ const createBondRequestIntoDB = async (
             coordinates: userCoords,
         };
     } else if (!hasUsableCoords) {
-        // Sin coords en el payload NI heredables del perfil: NO adjuntar un
-        // `location` parcial (solo `type`, sin coordinates), porque el índice
-        // 2dsphere rechazaría el documento y devolvería 500. El bond se guarda
-        // sin ubicación; los bonds online son globales y el matcheo geo ya tolera
-        // la ausencia de coords (solo filtra por $near cuando hay location+radius).
+        // No coords in payload and none inheritable: drop `location` entirely. A
+        // partial one (type without coordinates) is rejected by the 2dsphere
+        // index (500); matching tolerates a missing location.
         delete (payload as any).location;
     }
 
-    // Cupo ATÓMICO (m1: fix de carrera del bondLimit). El chequeo de arriba
-    // (~línea 56) es un fast-fail barato para no pagar OpenAI si ya estás claramente
-    // al tope, pero NO es autoritativo: entre ese conteo y el create hay round-trips
-    // a OpenAI, así que dos requests concurrentes podían leer el mismo conteo y ambas
-    // insertar (documentos distintos → sin conflicto natural) y pasar el límite.
-    // Acá, ya con censura/embeddings listos FUERA de la transacción, se re-cuenta y se
-    // crea DENTRO de una transacción corta, con una escritura-guardia ($inc bondSeq)
-    // sobre el doc del usuario que FUERZA un WriteConflict entre creaciones simultáneas
-    // del mismo user → withTransaction reintenta la 2da, re-cuenta y ve el bono ya creado.
+    // Atomic quota (race fix): the check above is a cheap fast-fail, not
+    // authoritative — two concurrent requests could both insert. Re-count and
+    // create inside a short transaction; the guard write ($inc bondSeq) forces a
+    // WriteConflict so withTransaction retries the second one.
     let created: any;
     let countAfterCreate = 0;
     const session = await mongoose.startSession();
@@ -200,9 +150,7 @@ const createBondRequestIntoDB = async (
         await session.withTransaction(async () => {
             const countNow = await BondRequest.countDocuments({
                 user: userId,
-                // EXACTAMENTE el mismo criterio que el fast-fail, por construcción:
-                // si difirieran, el chequeo barato y el autoritativo darían
-                // veredictos distintos sobre la misma persona.
+                // Exactly the fast-fail criterion, by construction.
                 ...FILTRO_CUPO_VINCULOS,
             }).session(session);
             if (countNow >= (user.bondLimit ?? 25)) {
@@ -212,11 +160,10 @@ const createBondRequestIntoDB = async (
                     'BOND_LIMIT_REACHED'
                 );
             }
-            // Escritura-guardia: obliga a serializar creaciones concurrentes del
-            // mismo usuario (dos $inc al mismo doc → WriteConflict → reintento).
-            // `hasActiveBonds: true` va en la MISMA escritura, dentro de la
-            // transacción: todo vínculo nace vivo (status WAITING_FOR_LINK,
-            // isPause e isLinked en false por default). Ver vinculosVivos.ts.
+            // Guard write: serializes concurrent creates of the same user (two
+            // $inc on one doc → WriteConflict → retry). `hasActiveBonds: true` goes
+            // in the same write inside the transaction; every bond is born alive.
+            // See vinculosVivos.ts.
             const guardedUser = await NormalUser.updateOne(
                 { _id: userId },
                 { $inc: { bondSeq: 1 }, $set: { hasActiveBonds: true } },
@@ -226,15 +173,10 @@ const createBondRequestIntoDB = async (
             if (await hasBondIdentity(BondRequest, userId, offerTrimmed, wantTrimmed, session)) {
                 throw new AppError(httpStatus.CONFLICT, DUPLICATE_BOND_MESSAGE);
             }
-            // WHITELIST (anti mass-assignment): se arman los campos EXPLÍCITOS
-            // que el usuario puede fijar. Antes era `{ ...payload, ... }`, y como
-            // `validateRequest` NO recorta el body, un cliente podía inyectar
-            // campos internos (`status`, `isLinked`, `isPause`, `matchesComputedAt`)
-            // y crear un bono con estado corrupto (ej. `isLinked:true` → invisible
-            // al matcheo, o saltarse la regla de duplicado activo). Esos campos SOLO
-            // los fija el sistema (o su default en el modelo). `location` ya viene
-            // saneada arriba (heredada o borrada); `description`/`modality`/`radius`
-            // caen a su default si vienen undefined.
+            // Whitelist (anti mass-assignment): only user-settable fields. A
+            // `{ ...payload }` spread let clients inject internal fields (`status`,
+            // `isLinked`, `isPause`, `matchesComputedAt`) and corrupt state; those
+            // are set only by the system or the model default.
             const [doc] = await BondRequest.create(
                 [
                     {
@@ -255,9 +197,8 @@ const createBondRequestIntoDB = async (
             countAfterCreate = countNow + 1;
         });
     } catch (error: unknown) {
-        // Red anti-carrera: un doble-submit concurrente puede pasar el chequeo
-        // previo y chocar contra el índice único parcial (E11000). Se traduce a
-        // un CONFLICT amigable (mismo mensaje) en vez de un 500 genérico.
+        // Anti-race net: a concurrent double submit passes the pre-check and hits
+        // the partial unique index (E11000); map it to the friendly CONFLICT.
         if ((error as { code?: number })?.code === 11000) {
             throw new AppError(httpStatus.CONFLICT, DUPLICATE_BOND_MESSAGE);
         }
@@ -266,22 +207,14 @@ const createBondRequestIntoDB = async (
         await session.endSession();
     }
 
-    // Robot: precomputar los matches de este bond nuevo (no bloquea la respuesta).
+    // Robot: precompute this new bond's matches (does not block the response).
     enqueueRecompute(created._id.toString(), MATCH_PRIORITY_USER);
 
-    // Empujón a subir de plan al LLEGAR AL TOPE (25 Free / 100 Standard). NO en
-    // Premium (1000: no hay plan superior). Best-effort: no debe tumbar la
-    // creación del vínculo. Al clickear, el front rutea a /subscriptions.
-    //
-    // AVISA CADA VEZ QUE SE LLEGA AL TOPE, no una sola vez en la vida (decisión
-    // de Emilio, 11/9). `subscriptionNudgeAt` marca el tope ya avisado, y el
-    // borrado de un vínculo lo limpia: si la persona elimina para hacer lugar y
-    // más adelante vuelve a llenar el cupo, se le avisa de nuevo.
-    //
-    // Antes el flag no se limpiaba nunca, así que el aviso salía UNA vez por cada
-    // valor de `bondLimit` y después no volvía jamás — el único empujón de venta
-    // del producto se gastaba en el primer tope y no reaparecía aunque la persona
-    // siguiera chocando la pared todas las semanas.
+    // Upsell nudge when the plan cap is reached (25 Free / 100 Standard), not on
+    // Premium (no higher tier). Best-effort: must not break bond creation.
+    // Fires EVERY time the cap is hit: `subscriptionNudgeAt` is cleared on delete,
+    // so a user who frees space and refills gets nudged again (it used to fire once
+    // per `bondLimit` value and never again).
     try {
         const limit = user.bondLimit ?? 25;
         const isTopTier =
@@ -306,25 +239,23 @@ const createBondRequestIntoDB = async (
             });
         }
     } catch {
-        /* best-effort: el empujón no debe romper la creación del vínculo */
+        /* best-effort: the nudge must not break bond creation */
     }
 
     return created;
 };
 
 const getLastBond = async (userId: string) => {
-    // Los soft-deleted no cuentan como "último bono": el usuario ya los eliminó.
+    // Soft-deleted bonds don't count as "last bond": the user already removed them.
     return await BondRequest.findOne({ user: userId, isDeleted: { $ne: true } })
         .sort({ createdAt: -1 })
         .select('offer want location');
 };
 
 const getAllBondRequests = async (query: Record<string, unknown>) => {
-    // Seguridad: NUNCA exponer los vectores de embedding ni las coordenadas
-    // exactas de cada usuario. Antes se devolvía el doc completo → dump de todo
-    // el dataset de matcheo (ofertas, ubicaciones precisas y embeddings). Se
-    // ocultan igual que en myBondRequests. (De paso: search usaba campos
-    // inexistentes 'give'/'get' → se corrige a 'offer'/'want'.)
+    // Security: never expose embedding vectors or exact coordinates. Old code
+    // returned the full doc (a dump of the matching dataset). Side note: search
+    // used nonexistent 'give'/'get' fields, fixed to 'offer'/'want'.
     const resultQuery = new QueryBuilder(
         BondRequest.find({ isDeleted: { $ne: true } }).select(
             '-offerVector -wantVector -location'
@@ -350,9 +281,9 @@ const myBondRequests = async (
     query: Record<string, unknown>
 ) => {
     const resultQuery = new QueryBuilder(
-        // `isDeleted` es redundante con `isLinked:false` (el soft-delete marca los
-        // dos), pero esta es LA lista de bonos propios del usuario: si alguna vez
-        // se cambia cómo se marca un borrado, acá no debe reaparecer igual.
+        // `isDeleted` is redundant with `isLinked:false` (soft-delete sets both),
+        // but this is the user's own list: a changed delete marker must never
+        // let a removed bond reappear.
         BondRequest.find({
             user: userId,
             isLinked: false,
@@ -376,16 +307,13 @@ const myBondRequests = async (
 };
 
 const getSingleBondRequest = async (id: string, viewerId?: string) => {
-    // Seguridad: no exponer vectores de embedding ni coordenadas exactas (mismo
-    // criterio que getAllBondRequests / myBondRequests).
+    // Security: no embedding vectors nor exact coordinates (same as the list endpoints).
     const bondRequest = await BondRequest.findById(id).select(
         '-offerVector -wantVector -location'
     );
     if (!bondRequest)
         throw new AppError(httpStatus.NOT_FOUND, 'BondRequest not found');
-    // Visibilidad: por id solo se ve un bond ACTIVO y disponible (navegable, no
-    // pausado, no linkeado) o el propio dueño el suyo. Antes devolvía cualquier
-    // bond (pausado/linkeado/histórico/ajeno) por id.
+    // Visibility: by id only an active, available bond is visible (or the owner's own).
     const isOwner =
         !!viewerId && bondRequest.user?.toString() === viewerId.toString();
     const isVisible =
@@ -408,14 +336,11 @@ const updateBondRequestIntoDB = async (
     if (!bondRequest)
         throw new AppError(httpStatus.NOT_FOUND, 'BondRequest not found');
 
-    // Editar el CONTENIDO de un vínculo está prohibido por producto (crashea y se
-    // descartó). Lo único que se permite por esta vía es PAUSAR/REANUDAR, que es
-    // un estado válido del vínculo y el único interruptor que lo saca del pool.
-    //
-    // El bloqueo es por CAMPO y no cortando la ruta: cuando se cortó la ruta
-    // entera con un 403, se rompió el botón de pausa del front, que pega acá.
-    // Nada de esto reemplaza al allowlist de más abajo (que sigue siendo la
-    // defensa contra mass-assignment); esto es la regla de producto.
+    // Editing a bond's CONTENT is forbidden by product; only pause/resume is
+    // allowed here (the one switch that removes it from the matching pool).
+    // Blocking per FIELD, not per route: a 403 on the whole route broke the
+    // front's pause button, which calls this endpoint. The allowlist below still
+    // handles mass-assignment.
     const CAMPOS_DE_CONTENIDO = [
         'offer',
         'want',
@@ -434,10 +359,8 @@ const updateBondRequestIntoDB = async (
         );
     }
 
-    // Censura batcheada (misma optimización que el create): los campos que vienen
-    // en el payload (ofrezco/busco/descripción) se chequean en UNA sola llamada,
-    // no en tres. Capa COMPLETA, veredicto POR CAMPO. Editar SOLO la descripción
-    // también pasa por censura ANTES de guardar (antes se colaba sin filtro).
+    // Batched censorship (same optimization as create): one call, per-field verdicts.
+    // A description-only edit is now filtered too (it used to slip through).
     const toCheck: { label: string; text: string }[] = [];
     if (payload.offer) toCheck.push({ label: 'Offer', text: payload.offer });
     if (payload.want) toCheck.push({ label: 'Want', text: payload.want });
@@ -450,12 +373,9 @@ const updateBondRequestIntoDB = async (
         });
     }
 
-    // MASS-ASSIGNMENT: solo se aceptan los campos editables por el usuario. Antes se
-    // hacía findByIdAndUpdate(...payload) y, como validateRequest NO recorta el body,
-    // un usuario podía inyectar status/isLinked/offerVector/wantVector/user/
-    // matchesComputedAt → corromper estado o ENVENENAR el matcheo con vectores
-    // fabricados. Allowlist explícito; los embeddings se recomputan acá desde el
-    // texto, nunca vienen del cliente.
+    // Mass-assignment: allowlist only. `findByIdAndUpdate(...payload)` let users
+    // inject status/isLinked/vectors/user/matchesComputedAt and poison matching
+    // with fabricated vectors. Embeddings are recomputed here from the text.
     const ALLOWED_UPDATE_FIELDS = [
         'offer',
         'want',
@@ -472,11 +392,8 @@ const updateBondRequestIntoDB = async (
         }
     }
 
-    // Duplicado normalizado (mismo criterio que el create): editar un vínculo no
-    // debe dejarlo igual —salvo mayúsculas/espacios— a otro vínculo activo del mismo
-    // usuario. El create lo chequea; el update lo omitía, y el índice único es
-    // exact-string (no tolera case/espacios). Se compara el resultado FINAL (campo
-    // nuevo, o el existente si no se edita), excluyendo el propio vínculo.
+    // Normalized duplicate check (same as create): the unique index is exact-string,
+    // so compare the FINAL offer/want (new or existing), excluding this bond.
     if (safePayload.offer !== undefined || safePayload.want !== undefined) {
         const finalOffer = (safePayload.offer ?? bondRequest.offer ?? '').trim();
         const finalWant = (safePayload.want ?? bondRequest.want ?? '').trim();
@@ -527,16 +444,15 @@ const updateBondRequestIntoDB = async (
         });
     }
 
-    // Robot: la oferta/deseo/estado pudo cambiar -> invalidar cache y recomputar.
-    // `active` = sigue disponible para matchear (no pausado, esperando link).
+    // Robot: content/state changed → invalidate cache and recompute (fire-and-forget).
     const active =
         !!updated &&
         !updated.isPause &&
         updated.status === ENUM_BOND_REQUEST_STATUS.WAITING_FOR_LINK;
     invalidateAndRefresh(id, active).catch(() => undefined);
 
-    // De los campos editables, sólo `isPause` cambia si el vínculo está vivo
-    // (`status` e `isLinked` no están en ALLOWED_UPDATE_FIELDS).
+    // Of the editable fields, only `isPause` affects liveness (`status` and
+    // `isLinked` are not in ALLOWED_UPDATE_FIELDS).
     if (safePayload.isPause !== undefined) {
         await recalcularVinculosVivos(userId);
     }
@@ -552,25 +468,18 @@ const deleteBondRequestFromDB = async (userId: string, id: string) => {
         startSession: () => mongoose.startSession(),
     }).deleteBond(userId, id);
 
-    // REARMA EL EMPUJÓN DE SUSCRIPCIÓN (decisión de Emilio, 11/9).
-    //
-    // Borrar un vínculo es la única forma de que el cupo BAJE. Si no se limpiara
-    // el flag, la persona que llena el cupo, borra dos y vuelve a llenarlo NO
-    // recibiría el aviso la segunda vez — ni ninguna otra vez en su vida, porque
-    // `subscriptionNudgeAt` sigue igual al `bondLimit` para siempre.
-    //
-    // Con el `$unset`, el aviso vuelve a estar disponible: se avisa cada vez que
-    // se llega al tope, que es lo que corresponde. Best-effort a propósito: que
-    // no se pueda rearmar el empujón no puede hacer fallar un borrado.
+    // Rearm the subscription nudge: deleting is the only way quota drops, so the
+    // `$unset` lets the nudge fire again the next time the cap is reached.
+    // Best-effort on purpose: it must not fail the delete.
     NormalUser.updateOne(
         { _id: userId },
         { $unset: { subscriptionNudgeAt: '' } }
     ).catch(() => undefined);
 
-    // Robot: limpiar la cache de este bond y refrescar a los afectados.
+    // Robot: drop this bond's cache and refresh the affected bonds.
     invalidateAndRefresh(id, false).catch(() => undefined);
 
-    // Baja lógica o borrado: puede haber sido su último vínculo vivo.
+    // Soft or hard delete: this may have been the user's last live bond.
     await recalcularVinculosVivos(userId);
 
     return result;
@@ -621,8 +530,8 @@ export const calculateMatchScore = (
 
 type MatchType = 'entry' | 'surprise' | 'empty';
 
-/** Comparación shadow feed-vs-legacy. Se muestrea y corre después de servir:
- *  el camino elegido nunca espera por ella. Mide solapamiento del top-N. */
+/** Shadow feed-vs-legacy comparison: sampled and run after serving, so the
+ *  chosen path never waits for it. Measures top-N overlap. */
 const shadowCompareMatches = async (
     bondRequestId: string,
     served: any[],
@@ -664,15 +573,10 @@ export const getMatchingBondRequest = async (
     bondRequestId: string,
     query: Record<string, unknown>
 ) => {
-    // F3.6 (defensivo): clamp de page/limit. Un `?page=-5` daba startIndex negativo
-    // → `matches.slice(negativo, ...)` cuenta desde el FINAL y devuelve una página
-    // basura. page>=1; limit acotado a [1,500] (mismo tope global que el paginador).
-    // Se unifica con el helper común (ya testeado) en vez de repetir el clamp a
-    // mano: la versión anterior dejaba pasar `?page=1e999` (Math.max(1, Infinity)
-    // sigue siendo Infinity). Acá NO causaba un 500 —la paginación es en memoria
-    // con `.slice()`, que con Infinity devuelve vacío— pero tener dos
-    // implementaciones distintas del mismo clamp es lo que produce el próximo bug.
-    // NO toca nada del matcheo: sólo acota page/limit del serving.
+    // F3.6 (defensive): clamp page/limit. A negative `?page=` made startIndex
+    // negative and `.slice()` counted from the END. Uses the shared helper
+    // ([1,500]) instead of a hand-rolled clamp that let `?page=1e999` through.
+    // Serving only: never affects matching.
     const page = clampPage(query.page);
     const limit = clampLimit(query.limit, 10, 500);
 
@@ -682,11 +586,9 @@ export const getMatchingBondRequest = async (
         _id: bondRequestId,
         user: userId,
         status: ENUM_BOND_REQUEST_STATUS.WAITING_FOR_LINK,
-        // Un bono soft-deleted NO puede volver acá. El soft-delete lo marca con
-        // `isPause: true`, y unas líneas más abajo esta función DESPAUSA el bono
-        // al buscar coincidencias ("si el dueño busca, es señal de interés"). Sin
-        // este filtro, entrar a la pantalla de matches de un bono ya eliminado lo
-        // resucitaba parcialmente: volvía a quedar despausado.
+        // A soft-deleted bond must not come back here: the soft-delete sets
+        // `isPause: true` and this function un-pauses the bond below, partially
+        // resurrecting deleted bonds.
         isDeleted: { $ne: true },
     })
         .select(
@@ -696,29 +598,15 @@ export const getMatchingBondRequest = async (
 
     if (!startRequest) throw new AppError(404, 'Bond request not found');
 
-    // Reactivar al buscar: si el dueño aprieta "buscar coincidencia" sobre un
-    // vínculo pausado, es señal de interés → lo reactivamos (vuelve al pool) y
-    // avisamos al front (reactivated:true) para mostrar el cartel. La pausa es el
-    // único interruptor que saca del pool; buscar coincidencias lo re-enciende.
+    // Reactivate on search: hitting "find matches" on a paused bond signals
+    // interest → un-pause it (back in the pool) and tell the front (reactivated).
     let reactivated = false;
     if ((startRequest as any).isPause) {
-        // Además de despausar, limpiamos matchesComputedAt: al pausar, su caché
-        // pudo quedar vacía con timestamp reciente, y sin esto daría 'ready 0'
-        // falso. Con matchesComputedAt ausente, el flujo de abajo devuelve
-        // 'computing' y encola el recomputo.
-        //
-        // Y SE VENCE LA AGENDA, que es la mitad que faltaba (panel del 11/9).
-        // Desde el TTL adaptativo, limpiar `matchesComputedAt` YA NO HACE
-        // ELEGIBLE A NADA: el sweep mira `matchesNextAt`. Un vínculo frío
-        // despausado acá quedaba con la agenda a 24 horas vista; si además el
-        // encolado de prioridad de usuario de más abajo fallaba (Redis con hipo:
-        // el `.catch` lo traga y la API no computa inline a propósito), el vínculo
-        // quedaba ACTIVO, SIN CACHÉ y SIN AGENDA VENCIDA — o sea el front
-        // sondeando cada 3 segundos durante un día entero.
-        //
-        // `invalidateAndRefresh` ya vencía los dos campos juntos; este era el otro
-        // lugar del repo donde se ensucia la caché a mano y había quedado con la
-        // mitad vieja.
+        // Also clear matchesComputedAt (a paused bond can have an empty cache with a
+        // recent timestamp → false 'ready 0'), and expire the schedule: since the
+        // adaptive TTL the sweep reads `matchesNextAt`, so clearing the timestamp
+        // alone leaves the bond active, uncached and unscheduled (front polls for a
+        // whole day). `invalidateAndRefresh` expires both fields together.
         await BondRequest.updateOne(
             { _id: bondRequestId, user: userId },
             {
@@ -730,26 +618,22 @@ export const getMatchingBondRequest = async (
         (startRequest as any).matchesComputedAt = undefined;
         (startRequest as any).matchesNextAt = agendaVencida();
         reactivated = true;
-        // Despausado: el dueño vuelve a tener un vínculo vivo.
+        // Un-paused: the owner has a live bond again.
         await recalcularVinculosVivos(userId);
     }
 
-    // Matches precomputados. La petición es una simple LECTURA: el robot
-    // (BullMQ / inline) mantiene la cache caliente en segundo plano.
-    //
-    // MODO FEED (MATCH_FEED_READ): lee las N mejores filas del feed DEL BOND,
-    // con el índice { bond: 1, score: -1 }. Es un read acotado: ~400 filas
-    // (~150 KB) en vez del superset de { bonds: id } (miles de docs / ~4 MB).
-    // El resto del pipeline (dedup, bloqueos, fantasmas, ranking, paginado) es
-    // EXACTAMENTE el mismo. MODO LEGACY: se conserva para rollback.
+    // Precomputed matches: this request is a plain READ; the robot keeps the cache warm.
+    // FEED mode (MATCH_FEED_READ): top N rows of this bond's feed via the index,
+    // ~150 KB instead of the whole `{ bonds: id }` superset (~4 MB); the rest of the
+    // pipeline is identical. LEGACY mode is kept for rollback.
     const lecturaInicio = Date.now();
     let cached: any[];
     if (MATCHING.feedRead) {
         cached = await BondMatchFeed.find({ bond: bondRequestId })
             .sort({ score: -1, _id: 1 })
             .limit(MATCHING.feedScanLimit)
-            // Sin esto el driver trae 101 docs y pide un getMore: con Atlas
-            // remoto son ~400 ms extra de RTT por request.
+            // Otherwise the driver fetches 101 docs then issues a getMore:
+            // ~400 ms extra RTT on remote Atlas.
             .batchSize(MATCHING.feedScanLimit)
             .lean();
         bondMatchFeedRowsScanned.observe(cached.length);
@@ -764,32 +648,13 @@ export const getMatchingBondRequest = async (
     );
     const ttlMs = MATCHING.cacheTtlMinutes * 60 * 1000;
 
-    // SEÑAL DE INTERÉS REAL (escala). Que el dueño abra esta pantalla es lo único
-    // que dice "este vínculo me importa", y es lo que lo mantiene CALIENTE (TTL de
-    // 1 h en vez de 24 h). Ver matching.schedule.ts.
-    //
-    // ⚠️ DOS GUARDAS QUE NO SON OPCIONALES (las dos salieron del panel del 11/9):
-    //
-    // 1. `timestamps: false`. SIN ESTO, ESTA LÍNEA TOCA EL MOTOR DE MATCHEO.
-    //    El schema tiene `timestamps: true` y mongoose engancha un pre-hook en
-    //    `updateOne` (verificado en node_modules), así que la escritura también
-    //    pisaría `updatedAt`. Y `updatedAt` NO es decorativo: es la entrada de
-    //    `freshnessFactor` (matching.compute.ts:242 → matching.scoring.ts:65),
-    //    que pesa 0.1 del puntaje final. O sea que, sin la guarda, **tener tu
-    //    pantalla de coincidencias abierta te subía el ranking en la lista de
-    //    todos los demás** — y el front sondea cada 3 segundos. Autobombeo puro,
-    //    introducido de rebote por una señal de escala.
-    //
-    // 2. Estrangulador. Sin él esto escribía en CADA sondeo de 3 s y en cada
-    //    clic de paginado, sobre una colección con 5 índices y documentos de
-    //    ~40 KB (los dos vectores de 1536 dims). Para lo que la señal necesita
-    //    —saber si alguien miró en las últimas 72 h— un sello cada 5 minutos da
-    //    exactamente la misma respuesta por tres órdenes de magnitud menos
-    //    escritura.
-    //
-    // Fire-and-forget: si falla no pasa nada, el vínculo simplemente se enfría.
-    // Va ANTES del early-return para que también cuente cuando todavía no hay
-    // nada que mostrar, que es justo cuando más conviene que esté caliente.
+    // Real-interest signal: opening this screen is what keeps the bond HOT (1 h TTL
+    // instead of 24 h). Guard 1: `timestamps: false` — otherwise the write bumps
+    // `updatedAt`, which feeds `freshnessFactor` (0.1 of the score), so leaving the
+    // screen open boosted your ranking for everyone (the front polls every 3 s).
+    // Guard 2: throttle to one stamp every 5 min (the signal only needs a 72 h window)
+    // instead of writing on every poll and page click. Fire-and-forget, placed before
+    // the early return so bonds with nothing to show also get stamped.
     const servidoAntes = (startRequest as any)?.lastServedAt;
     const refrescoServidoMs =
         Math.max(Number(process.env.MATCH_SERVED_STAMP_MINUTES) || 5, 1) *
@@ -811,38 +676,24 @@ export const getMatchingBondRequest = async (
             ? Date.now() - new Date(cached[0].computedAt).getTime()
             : Infinity;
 
-    // ── DOS TTL DISTINTOS, Y LA DIFERENCIA IMPORTA ──────────────────────────
-    //
-    // `ttlMs` (60 min) = "¿conviene REFRESCAR esto?"
-    // `ttlServibleMs`  = "¿todavía vale la pena MOSTRARLO?"
-    //
-    // Antes eran el mismo número, y eso producía un bug que el TTL adaptativo
-    // habría multiplicado por 24: con la caché a 61 minutos, esta función
-    // devolvía `computing` + data VACÍA, o sea que el usuario veía un spinner y
-    // CERO coincidencias aunque tuviéramos sus matches guardados y perfectamente
-    // buenos. Con el sweep cubriendo 2.400 vínculos/hora eso ya pasaba seguido;
-    // con vínculos fríos refrescándose cada 24 h, el usuario habría visto el
-    // spinner CASI SIEMPRE.
-    //
-    // Ahora: si hay caché servible, SE SIRVE, y si además está vencida se encola
-    // el refresco por detrás con prioridad de usuario. Nadie mira un spinner
-    // teniendo datos. Es estrictamente mejor que antes, no sólo compatible.
+    // ttlMs: when to refresh. ttlServibleMs: how long stale data stays servable
+    // (avoids a spinner when the cache is old but valid). Serving stale data while
+    // enqueuing a user-priority refresh is strictly better than an empty 'computing'.
     const ttlServibleMs = MATCHING.serveTtlMinutes * 60 * 1000;
     const hayCacheServible = edadCacheMs < ttlServibleMs;
     const cacheVencida = edadCacheMs >= ttlMs;
 
     if (!hayCacheServible) {
-        // Sin nada que mostrar. Se conserva EXACTAMENTE la lógica de antes:
-        //   - computado hace poco y sin caché => se computó y dio CERO matches
-        //     => 'ready' + data vacía (el front deja de sondear).
-        //   - si no => se encola y se devuelve 'computing' al instante.
+        // Nothing servable. Previous logic kept: recently computed + no cache means
+        // it computed and found zero matches → 'ready' with empty data (the front
+        // stops polling); otherwise enqueue and return 'computing' immediately.
         const computedAt = (startRequest as any).matchesComputedAt;
         const recentlyComputed =
             !!computedAt &&
             Date.now() - new Date(computedAt).getTime() < ttlMs;
 
         if (!recentlyComputed) {
-            // Dispara el cómputo en segundo plano (fire-and-forget).
+            // Fire-and-forget background computation.
             enqueueRecompute(bondRequestId, MATCH_PRIORITY_USER);
         }
 
@@ -851,8 +702,8 @@ export const getMatchingBondRequest = async (
         });
 
         return {
-            // 'ready' = cómputo terminado (aquí, con cero matches);
-            // 'computing' = encolado, el front debe reintentar.
+            // 'ready' = finished (zero matches here); 'computing' = enqueued,
+            // the front must retry.
             status: recentlyComputed ? 'ready' : 'computing',
             reactivated,
             total: 0,
@@ -862,9 +713,8 @@ export const getMatchingBondRequest = async (
         };
     }
 
-    // Hay caché servible. Si además está vencida, se refresca POR DETRÁS con
-    // prioridad de usuario mientras se sirve lo que ya tenemos. La deduplicación
-    // por `jobId` de BullMQ hace que recargar la pantalla no apile jobs.
+    // Servable cache. If also expired, refresh in the background with user priority
+    // while serving what we have; BullMQ's `jobId` dedup keeps reloads from stacking jobs.
     if (cacheVencida) {
         enqueueRecompute(bondRequestId, MATCH_PRIORITY_USER);
     }
@@ -879,13 +729,12 @@ export const getMatchingBondRequest = async (
         parts: IMatchScoreParts;
     }[] = records.map((r: any) => ({
         ids: (r.bonds ?? r.ids).map((id: any) => id.toString()),
-        // Dueños que YA guarda cada BondMatch → filtrar bloqueados sin poblar.
+        // Owners are already stored per BondMatch → block filtering without populating.
         users: (r.users ?? []).map((id: any) => id.toString()),
         score: r.score,
         type: r.type as MatchType,
-        // `parts` viene tanto de la cache (BondMatch.parts) como del cómputo al
-        // vuelo (MatchRecord.parts). Se conserva para exponer el desglose del
-        // puntaje ("why you matched"). Fallback defensivo si faltara.
+        // `parts` comes from the cache (BondMatch) or the on-the-fly compute; kept to
+        // expose the "why you matched" breakdown. Defensive fallback if missing.
         parts: (r.parts ?? {
             sem: 0,
             rep: 0,
@@ -894,16 +743,10 @@ export const getMatchingBondRequest = async (
         }) as IMatchScoreParts,
     }));
 
-    // F3.3 — Backfill defensivo de dueños en docs LEGACY de BondMatch. Los docs
-    // viejos pueden traer `users` vacío (denormalización previa); sin dueños, el
-    // filtro de bloqueo de más abajo (`m.users.some(...)`) da SIEMPRE false y un
-    // usuario bloqueado se colaría en los matches. Si algún match viene sin
-    // dueños, los poblamos desde la DB con UNA query liviana (solo `_id user`, sin
-    // poblar vínculos), reusando el patrón del filtro fantasma. `BondRequest.user`
-    // y `BondMatch.users` refieren ambos a `NormalUser`: el id backfilleado cae en
-    // el MISMO espacio que `p2pBlockedIds` y el filtro admin, idéntico a lo que el
-    // cómputo persiste. Costo: CERO en el caso común (los BondMatch nuevos ya traen
-    // `users`); solo corre si hay docs legacy.
+    // F3.3 — Backfill owners on LEGACY BondMatch docs. Old docs may have empty
+    // `users`, which makes the block filter below always false and lets blocked
+    // users through. One light query, run only if such docs exist, using the same
+    // id space as the p2p/admin filters (`BondRequest.user` → `NormalUser`).
     const matchesSinDuenos = matches.filter((m) => m.users.length === 0);
     if (matchesSinDuenos.length > 0) {
         const bondIdsSinDueno = [
@@ -933,15 +776,12 @@ export const getMatchingBondRequest = async (
         }
     }
 
-    // Bloqueo (B.4 + C.5): se filtra el SET COMPLETO antes de paginar (para que el
-    // total y las páginas sean correctos), pero usando los dueños que YA guarda
-    // cada BondMatch (`users`) → NO hace falta poblar los vínculos para filtrar.
-    // PERF: antes se poblaban TODOS los vínculos de TODOS los matches en CADA
-    // request (y en cada cambio de página); ese era el costo que hacía lento el
-    // paginado. Ahora se puebla SOLO la página (más abajo, tras el slice).
-    //  - P2P (B.4): usuarios bloqueados por/hacia el que consulta (1 query).
-    //  - Admin (C.5): usuarios con User.isBlocked === true (1 query liviana sobre
-    //    los dueños involucrados, sin traer los vínculos).
+    // Blocking (B.4 + C.5): filter over the full set before paginating so total and
+    // pages stay correct, using the owners each BondMatch already stores (no need to
+    // populate the bonds). Only the served page is populated later — populating every
+    // bond of every match on each request was what made paging slow.
+    //  - P2P (B.4): users blocked by/for the viewer (1 query).
+    //  - Admin (C.5): owners with User.isBlocked === true (1 light query).
     const p2pBlockedIds = new Set(await getBlockedIdsFor(userId));
     const allOwners = [...new Set(matches.flatMap((m) => m.users))];
     const adminBlockedOwners = new Set<string>();
@@ -966,14 +806,11 @@ export const getMatchingBondRequest = async (
         }
     }
 
-    // Matches FANTASMA / NO DISPONIBLES: la cache (BondMatch) puede tener tratos
-    // cuyos vínculos ya no están vivos — el otro dueño borró su vínculo (queda un
-    // id colgado → antes se poblaba a `null` y la UI mostraba un match vacío) o lo
-    // pausó (antes se poblaba igual y aparecía como disponible sin estarlo). Un
-    // match solo vale si TODOS los OTROS participantes (no el propio sourceBond)
-    // siguen EXISTIENDO y ACTIVOS (status navegable + no pausado). Se filtra ANTES
-    // de contar/paginar, así el `total` y lo mostrado quedan coherentes. Costo: una
-    // sola query liviana que trae solo `_id` (índice), no pobla nada.
+    // Ghost / unavailable matches: the cache may hold deals whose other bonds are
+    // gone (deleted → dangling id rendered as an empty match) or paused (rendered as
+    // available). A match is valid only if all OTHER participants still exist and are
+    // navigable. Filtered before counting/paging so `total` stays coherent; costs one
+    // light `_id`-only query and populates nothing.
     const otherIds = [
         ...new Set(
             matches.flatMap((m) => m.ids).filter((id) => id !== bondRequestId)
@@ -1001,11 +838,9 @@ export const getMatchingBondRequest = async (
         }
     }
 
-    // Dedup defensivo por CONJUNTO de participantes (mismos bonds, cualquier
-    // orden): la cache previa puede tener el mismo grupo dos veces (un ciclo y su
-    // reverso). Se colapsa al de MAYOR score, así el usuario nunca ve el mismo
-    // match repetido y el `total` refleja el conteo real. (El cómputo ya
-    // deduplica en origen; esto cubre lo ya persistido hasta el próximo recómputo.)
+    // Defensive dedup by participant SET (same bonds, any order): the cache may hold
+    // a cycle and its reverse. Keep the highest score so the user never sees the same
+    // match twice and `total` reflects reality (covers already-persisted rows).
     const bestBySet = new Map<string, (typeof matches)[number]>();
     for (const m of matches) {
         const key = [...m.ids].sort().join('|');
@@ -1018,12 +853,11 @@ export const getMatchingBondRequest = async (
         matches.push(...deduped);
     }
 
-    //  ORDEN. NUEVO (default): por SCORE, sin dictadores. `pairBias` es una
-    //  preferencia SUAVE por cadenas cortas, aplicada como resta al ranking
-    //  (size 2 = 0; 3 = -pairBias; 4 = -2·pairBias; ...), NO un override: un ciclo
-    //  bastante mejor por cálculo igual le gana a un par. Se aplica acá (serving),
-    //  así ajustar `pairBias` NO requiere recomputar — basta reiniciar la API.
-    //  LEGACY (interruptor): vuelve al orden duro size→type→score.
+    //  ORDER. New default: by SCORE. `pairBias` is a SOFT preference for short
+    //  chains (size 2 = 0, 3 = -pairBias, 4 = -2·pairBias, ...), a subtraction from
+    //  the ranking, not an override: a much better cycle still beats a pair. Applied
+    //  at serving, so tuning `pairBias` needs no recompute — just an API restart.
+    //  LEGACY switch: hard size→type→score order.
     const typePriority: Record<MatchType, number> = {
         entry: 1,
         surprise: 2,
@@ -1047,20 +881,17 @@ export const getMatchingBondRequest = async (
         if (ra !== rb) {
             return rb - ra;
         }
-        // Desempate ESTABLE por la combinación de bonds (única por match): sin
-        // esto, empates exactos de score podían reordenarse entre páginas →
-        // un match se duplicaba en una página y faltaba en otra.
+        // STABLE tiebreak on the bond combination (unique per match): without it,
+        // exact score ties could reorder between pages → a match duplicated on one
+        // page and missing from another.
         return a.ids.join('-').localeCompare(b.ids.join('-'));
     });
 
-    // TOPE DE SERVICIO (pedido de Emilio): el matcheo es un RANKING acotado, no un
-    // catálogo. Servir por `bonds` junta las cadenas de MUCHOS sourceBonds (el bond
-    // participa en cadenas que originaron otros) → el conjunto podía tener cientos
-    // de cadenas y el front paginaba 40+ páginas. Nos quedamos con las MEJORES
-    // `maxResults` (100) que superen `minServeScore` (0.4) sobre el score FINAL.
-    // `matches` ya viene ordenado por ranking desc, así que filtrar+cortar preserva
-    // el orden. El `total` pasa a ser el del conjunto TOPEADO (coherente con las
-    // páginas: como mucho 100 → nunca más de ceil(100/limit) páginas).
+    // Serve cap: matching is a bounded RANKING, not a catalog. Serving by `bonds`
+    // merges chains from many sourceBonds (hundreds of them), so keep only the best
+    // `maxResults` (100) above `minServeScore` (0.4) on the final score. `matches` is
+    // already ranked desc, so filter+cut preserves order and `total` is the capped
+    // set (never more than ceil(100/limit) pages).
     const served = matches
         .filter((m) => m.score >= MATCHING.minServeScore)
         .slice(0, MATCHING.maxResults);
@@ -1068,13 +899,11 @@ export const getMatchingBondRequest = async (
     const startIndex = (page - 1) * limit;
     const pageMatches = served.slice(startIndex, startIndex + limit);
 
-    // ROTACIÓN (re-aplicada 3/8, del 30/7): ahora que servimos por `bonds`, un
-    // match puede venir guardado bajo el sourceBond de la CONTRAPARTE, así que el
-    // bond que estás mirando puede caer en cualquier posición de la cadena. Se
-    // rota cíclicamente para que TU bond quede SIEMPRE primero. Es una rotación
-    // (no un reordenamiento): preserva el orden del ciclo → los prev/next y por
-    // ende los colores del intercambio siguen correctos. `users` se rota igual
-    // para no desalinearlo de `ids`.
+    // ROTATION: a match may be stored under the counterpart's sourceBond, so the
+    // bond being viewed can sit anywhere in the chain. Rotate the cycle cyclically so
+    // YOUR bond is always first. It is a rotation (not a reorder): cycle order is
+    // preserved, so prev/next and the swap colors stay correct. `users` rotates too
+    // to stay aligned with `ids`.
     for (const m of pageMatches) {
         const pos = m.ids.indexOf(bondRequestId);
         if (pos > 0) {
@@ -1085,27 +914,23 @@ export const getMatchingBondRequest = async (
         }
     }
 
-    // PERF (arreglo del paginado lento): poblar SOLO los vínculos de ESTA página,
-    // no todo el conjunto. Así el costo de cada página deja de escalar con el
-    // total de matches y pasa a ser ~constante (los ~pocos de la página).
+    // Perf: populate only THIS page's bonds, so per-page cost stops scaling with the
+    // total match count and becomes ~constant.
     const pageIds = [...new Set(pageMatches.flatMap((m) => m.ids))];
     const populated = await BondRequest.find({ _id: { $in: pageIds } })
-        // WHITELIST en la consulta (defensa en profundidad): traemos SOLO offer,
-        // want y user. Antes era `.select('-wantVector -offerVector')`, que NO
-        // excluía `location` → el `{...request}` de abajo filtraba las coordenadas
-        // GPS exactas de cada contraparte. Ahora la ubicación ni se lee de la DB, y
-        // además la salida pasa por `publicMatchRequest` (whitelist de campos).
+        // Query whitelist (defense in depth): only offer, want and user. The old
+        // `.select('-wantVector -offerVector')` did not exclude `location`, so the
+        // `{...request}` below leaked each counterpart's exact GPS coordinates.
+        // Output also goes through `publicMatchRequest`.
         .select('offer want user')
-        // `reputation` va en el select del USER: la tarjeta muestra su estrella, y
-        // sin este campo el front leía uno inexistente (`avgRating`) y mostraba
-        // SIEMPRE "⭐ 0", incluso para gente con reseñas reales.
+        // `reputation` must be selected: the card shows the star rating, and without
+        // it the front read a nonexistent field (`avgRating`) and always showed "⭐ 0".
         .populate({ path: 'user', select: 'name profile_image reputation' })
         .lean();
     const populatedMap = new Map(
         populated.map((r) => [r._id.toString(), r])
     );
 
-    //  ASSIGN COLORS TO EACH MATCH (FIXED VERSION)
     const result = pageMatches.map((m) => {
         const cycleSize = m.ids.length;
 
@@ -1125,18 +950,11 @@ export const getMatchingBondRequest = async (
                 populatedMap.get(m.ids[nextIndex])?.offer
             );
 
-            // REGLA DURA del color. Cada caja pertenece a UN intercambio (par):
-            //   - la OFERTA de i satisface el DESEO de i-1 → par (prevWant, currentOffer)
-            //   - el DESEO de i lo satisface la OFERTA de i+1 → par (currentWant, nextOffer)
-            // Color especial de cada caja (specialEntryColor), POR-PAR (mismo color
-            // en las dos puntas; el vacío solo aparea con vacío o sorpresa):
-            //   - vacío ↔ sorpresa → violeta (comodín contra comodín).
-            //   - vacío ↔ vacío → coral (regalo mutuo).
-            //   - sorpresa ↔ sorpresa → fucsia (doble sorpresa).
-            //   - sorpresa ↔ concreto / concreto ↔ concreto → pastel de paleta.
-            // Índice con módulo: maxCycleSize puede llegar a 6 y la paleta tiene 5
-            // colores → sin módulo, colors[5] sería undefined. Módulo = mismo
-            // comportamiento que el front (MatchGroup) y pares concretos siempre coloreados.
+            // Color rule: each box belongs to ONE pair — i's OFFER matches i-1's WANT
+            // and i's WANT is matched by i+1's OFFER. `specialEntryColor` gives the
+            // per-pair color (empty↔surprise violet, empty↔empty coral,
+            // surprise↔surprise fuchsia, else palette pastel). Modulo: the cycle can
+            // reach 6 and the palette has 5 colors.
             const wantColor =
                 specialEntryColor(currentWant, nextOffer) ??
                 colors[index % colors.length];
@@ -1144,9 +962,8 @@ export const getMatchingBondRequest = async (
                 specialEntryColor(currentOffer, prevWant) ??
                 colors[prevIndex % colors.length];
 
-            // `publicMatchRequest`: whitelist de salida (identidad + offer/want +
-            // user acotado). Nunca expone location/flags internos aunque el doc los
-            // trajera. Los colores del par se agregan aparte (no viven en el doc).
+            // `publicMatchRequest`: output whitelist (identity + offer/want + bounded
+            // user). Pair colors are added here (they don't live in the doc).
             return {
                 ...publicMatchRequest(request),
                 offerColor,
@@ -1156,10 +973,8 @@ export const getMatchingBondRequest = async (
 
         const round3 = (n: number) => Number((n ?? 0).toFixed(3));
 
-        // Anticipo "doble vacío": TODOS los participantes ofrecen vacío y piden
-        // vacío. Dos (o más) personas que no ofrecen ni piden nada y se encontraron
-        // → la UI muestra el mensaje de "¿ya están conversando?". Es una feature
-        // más entre tantas; no se promueve de más.
+        // "Double empty" flag: ALL participants offer and want empty → the UI shows
+        // the "still talking?" message.
         const isFullEmpty =
             cycleSize > 0 &&
             m.ids.every((id) => {
@@ -1172,9 +987,8 @@ export const getMatchingBondRequest = async (
             matchScore: Number(m.score.toFixed(3)),
             type: m.type,
             isFullEmpty,
-            // Nº de participantes del trato (= matchRequest.length).
             size: m.ids.length,
-            // Desglose del puntaje para la UI "why you matched".
+            // Score breakdown for the UI "why you matched".
             scoreParts: {
                 sem: round3(m.parts.sem),
                 rep: round3(m.parts.rep),
@@ -1184,8 +998,8 @@ export const getMatchingBondRequest = async (
         };
     });
 
-    // Shadow muestreado: compara feed con legacy DESPUÉS de servir. Nunca
-    // afecta la respuesta ni la espera del usuario.
+    // Sampled shadow comparison of feed vs legacy AFTER serving: never affects the
+    // response nor the user's wait.
     if (MATCHING.feedShadow && Math.random() < MATCHING.feedShadowSample) {
         void shadowCompareMatches(
             bondRequestId,
@@ -1199,11 +1013,11 @@ export const getMatchingBondRequest = async (
     bondMatchStatusTotal.inc({ status: 'ready' });
 
     return {
-        // Cache fresca servida: cómputo listo.
+        // Fresh cache served: computation is done.
         status: 'ready',
         reactivated,
-        // Total real de matches SERVIDOS (topeado a 100 y ≥ umbral): coherente con
-        // la paginación → el front nunca muestra más de ceil(100/limit) páginas.
+        // Real number of SERVED matches (capped at 100 and above threshold), coherent
+        // with pagination → the front never shows more than ceil(100/limit) pages.
         total: served.length,
         page,
         limit,
@@ -1211,9 +1025,9 @@ export const getMatchingBondRequest = async (
     };
 };
 
-// Bonds PÚBLICOS de un usuario para las tarjetas "Personas"/perfil (ofertas/deseos).
-// Solo bonds vivos/navegables: WAITING_FOR_LINK u ONGOING y no pausados.
-// Excluye los vectores (offerVector/wantVector) por proyección de inclusión.
+// Public bonds of a user for the "People"/profile cards. Only live, navigable
+// bonds (WAITING_FOR_LINK or ONGOING, not paused); embedding vectors excluded by
+// an inclusion projection.
 const getBondRequestsByUser = async (
     userId: string,
     viewerId?: string,
@@ -1225,14 +1039,9 @@ const getBondRequestsByUser = async (
         throw new AppError(httpStatus.BAD_REQUEST, 'Invalid user id');
     }
 
-    // Paginación: de a 10 por defecto. `page` >= 1; `limit` acotado a [1,50] para
-    // que un cliente no pida una página gigante. El front muestra el conteo total
-    // y navega por páginas.
-    // Mismo helper que el resto. La versión a mano que había acá dejaba pasar
-    // `?page=1e999` (`Math.max(1, Infinity)` sigue siendo Infinity) y ACÁ sí
-    // rompe: a diferencia del serving del matcheo —que pagina en memoria con
-    // `.slice()` y con Infinity devuelve vacío— este endpoint va a Mongo con
-    // `.skip(Infinity)` → 500.
+    // Pagination: 10 per page by default; page >= 1 and limit capped to [1,50]. Same
+    // shared helper as elsewhere — the hand-rolled clamp let `?page=1e999` through as
+    // Infinity and, since this endpoint uses `.skip()`, that was a 500.
     const page = clampPage(pageArg);
     const limit = clampLimit(limitArg, 10, 50);
     const skip = (page - 1) * limit;
@@ -1248,7 +1057,7 @@ const getBondRequestsByUser = async (
             ],
         },
         isPause: false,
-        // Un vínculo soft-deleted no se lista en el perfil ni en las tarjetas.
+        // A soft-deleted bond is not listed on the profile nor in the cards.
         isDeleted: { $ne: true },
     };
 
@@ -1257,11 +1066,8 @@ const getBondRequestsByUser = async (
         .lean();
     const bondsPublic = target ? (target as any).bondsPublic !== false : true;
 
-    // Bloqueos PRIMERO: si quien mira tiene relación de bloqueo con el objetivo, no
-    // se exponen sus bonds NI su conteo. Va ANTES que la rama de privacidad porque,
-    // si no, a un viewer bloqueado que abría el perfil de alguien con vínculos
-    // privados se le devolvía el conteo REAL (se filtraba cuántos vínculos tiene).
-    // Respuesta indistinguible: 0.
+    // Blocks FIRST: a blocked viewer must get neither the bonds nor the count. It must
+    // run before the privacy branch, which otherwise leaked the real count.
     if (viewerId && !isOwner) {
         const blockedIds = await getBlockedIdsFor(viewerId);
         if (blockedIds.includes(userId)) {
@@ -1269,23 +1075,16 @@ const getBondRequestsByUser = async (
         }
     }
 
-    // PRIVACIDAD (cambio 24/7): ocultar es ocultar de verdad en el DESCUBRIMIENTO.
-    // Antes el backend SIEMPRE mandaba la lista y el front decidía taparla, así
-    // que en la tarjeta de Personas se filtraba igual el último vínculo. Ahora, si
-    // el dueño ocultó sus vínculos y quien mira NO es el dueño, el backend NO
-    // manda la lista: sólo el flag y el conteo (para la etiqueta "N privados").
-    // OJO: esto NO afecta el matcheo — el motor ignora `bondsPublic`, así que un
-    // vínculo oculto sigue matcheando y apareciendo en las cadenas de intercambio.
+    // Privacy: hiding must really hide in discovery. If the owner hid their bonds and
+    // the viewer is not the owner, send only the flag and the count. Matching is
+    // unaffected: the engine ignores `bondsPublic`, so hidden bonds still match.
     if (!bondsPublic && !isOwner) {
         const count = await BondRequest.countDocuments(filter);
         return { bondsPublic, count, bonds: [], page, limit };
     }
 
-    // Buscador de vínculos DENTRO del perfil: filtra por ofrece/busca/descripción,
-    // insensible a acentos y mayúsculas (mismo criterio que la búsqueda de
-    // Personas). Sin término, se listan los más nuevos como antes. Con término, se
-    // busca sobre TODOS los vínculos de la persona (no sólo los 20 más recientes),
-    // que es justo el punto: encontrar uno entre cientos sin scrollear.
+    // In-profile search over offer/want/description, accent- and case-insensitive.
+    // With a term it searches ALL of the user's bonds, not just the newest 20.
     const term = typeof searchTerm === 'string' ? searchTerm.trim() : '';
     if (term) {
         const rx = buildLooseRegex(term);
@@ -1295,8 +1094,7 @@ const getBondRequestsByUser = async (
     const count = await BondRequest.countDocuments(filter);
 
     const bonds = await BondRequest.find(filter)
-        // Privacidad: NO exponer `location` (coordenadas). Se muestran
-        // ofrece/busca y modalidad, nunca dónde vive la persona.
+        // Privacy: never expose `location` (coordinates), only offer/want/modality.
         .select('offer want description modality radius status createdAt')
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -1306,11 +1104,9 @@ const getBondRequestsByUser = async (
     return { bondsPublic, count, bonds, page, limit };
 };
 
-/* Cupo visible del plan: cuántos vínculos ocupa y cuánto le queda.
- * Usa el MISMO filtro que `createBondRequestIntoDB` (FILTRO_CUPO_VINCULOS), así
- * que el número mostrado y el chequeo del 403 no pueden divergir. Es una lectura
- * aparte de `myBondRequests`: esa lista excluye `isLinked`, y un vínculo linkeado
- * SÍ sigue ocupando cupo (sólo eliminarlo lo libera). */
+/* Visible plan quota: bonds used and remaining. Uses the same FILTRO_CUPO_VINCULOS
+ * as create, so the shown number cannot diverge from the 403 check. Unlike
+ * `myBondRequests`, linked bonds still consume quota; only deleting frees it. */
 const getBondQuota = async (userId: string) => {
     const [user, used] = await Promise.all([
         NormalUser.findById(userId).select('bondLimit'),

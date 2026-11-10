@@ -16,7 +16,7 @@ const addRating = catchAsync(async (req, res) => {
     });
 });
 
-// D.3 (Tanda 2): vista publica de puntuaciones recibidas de un usuario.
+// Public view of ratings received by a user.
 const getPublicRatings = catchAsync(async (req, res) => {
     const result = await bondRatingServices.getPublicRatings(
         req.params.userId,

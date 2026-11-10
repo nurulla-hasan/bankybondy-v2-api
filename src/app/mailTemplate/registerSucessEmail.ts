@@ -1,7 +1,7 @@
 import { wrapEmail, codeBox, BRAND_FONT, escHtml } from './brandAssets';
 
-// Correo de ACTIVACIÓN de cuenta (código OTP). Estética Bankybondy: logo exacto,
-// Poppins incrustada, índigo de marca. Se llama desde el registro y el reenvío.
+// Account ACTIVATION email (OTP code), Bankybondy branding via brandAssets.
+// Called from signup and resend.
 const registrationSuccessEmailBody = (
     name: string,
     activationCode: number

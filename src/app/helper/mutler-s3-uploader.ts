@@ -6,9 +6,7 @@ import multer from 'multer';
 import multerS3 from 'multer-s3';
 import AppError from '../error/appError';
 
-/**
- * Configure and setup AWS S3 client
- */
+/** Shared S3 client for all uploads. */
 const s3 = new S3Client({
     region: process.env.AWS_REGION || 'us-east-1',
     credentials: {
@@ -47,9 +45,7 @@ const ALLOWED_MIMETYPES = new Set([
     'application/pdf',
 ]);
 
-/**
- * Setup file upload to AWS S3
- */
+/** Multer middleware storing uploads on S3. */
 export const uploadFile = () => {
     const fileFilter = (req: Request, file: any, cb: any) => {
         const allowedFieldnames = [
@@ -82,10 +78,8 @@ export const uploadFile = () => {
             // Allow requests without any files
             cb(null, true);
         } else if (allowedFieldnames.includes(file.fieldname)) {
-            // El navegador manda el tipo con parametros (p.ej. MediaRecorder de
-            // Chrome: 'audio/webm;codecs=opus'). Comparar por igualdad exacta
-            // rechazaba grabaciones validas y el cliente recibia un 500. Se
-            // normaliza a la parte base del tipo antes de validar.
+            // Browsers append params to the media type (e.g. MediaRecorder:
+            // 'audio/webm;codecs=opus'); compare only the base type.
             const mimetype = (file.mimetype || '')
                 .split(';')[0]
                 .trim()
@@ -93,8 +87,7 @@ export const uploadFile = () => {
             if (ALLOWED_MIMETYPES.has(mimetype)) {
                 cb(null, true);
             } else {
-                // 400 (no 500): el archivo lo eligio el cliente, no es un fallo
-                // interno del servidor.
+                // Client-chosen file → 400, not a server 500.
                 cb(new AppError(400, 'Invalid file type'));
             }
         } else {
@@ -106,11 +99,10 @@ export const uploadFile = () => {
         s3: s3,
         bucket: process.env.AWS_S3_BUCKET_NAME || 'your-bucket-name',
         contentType: multerS3.AUTO_CONTENT_TYPE,
-        // Removing ACL setting as your bucket doesn't support ACLs
+        // No ACL: the bucket does not support them.
         key: function (req, file, cb) {
             let uploadPath = '';
 
-            // Maintain the same folder structure as before
             if (file.fieldname === 'profile_image') {
                 uploadPath = 'uploads/images/profile';
             } else if (file.fieldname === 'category_image') {
@@ -151,19 +143,15 @@ export const uploadFile = () => {
                 uploadPath = 'uploads';
             }
 
-            // Sanitize the filename just like in the original code
             const sanitizedOriginalName = file.originalname
                 .replace(/\s+/g, '_')
                 .replace(/[^\w.-]+/g, '');
 
             const name = Date.now() + '-' + sanitizedOriginalName;
 
-            // IDOR de archivos subidos: los adjuntos de chat se namespacean por
-            // dueño (profileId del que sube) desde siempre. Los archivos de audio
-            // (audio y portada) hacen lo mismo desde la subida en dos pasos: así
-            // /audio/delete-upload y /audio/create-audio pueden exigir que la URL
-            // pertenezca al que la manda, y un usuario no puede borrar ni publicar
-            // archivos de otro aunque conozca la URL.
+            // IDOR guard: chat attachments and audio files are namespaced by
+            // owner so delete/publish endpoints can verify the URL belongs to
+            // the caller.
             const OWNER_NAMESPACED_FIELDS = [
                 'conversation_image',
                 'conversation_pdf',
@@ -185,7 +173,7 @@ export const uploadFile = () => {
         storage: storage,
         fileFilter: fileFilter,
         limits: {
-            fileSize: 50 * 1024 * 1024, // 50MB limit, adjust as needed
+            fileSize: 50 * 1024 * 1024, // 50 MB cap
         },
     }).fields([
         { name: 'image', maxCount: 1 },
@@ -215,7 +203,7 @@ export const uploadFile = () => {
     return upload;
 };
 
-// get cloud font url
+// Build a CDN URL for an S3 key.
 export const getCloudFrontUrl = (s3FilePath: string): string => {
     return `${process.env.CLOUDFRONT_URL}/${s3FilePath}`;
 };

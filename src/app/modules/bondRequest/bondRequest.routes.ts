@@ -10,7 +10,7 @@ const router = express.Router();
 
 router.post(
     '/create',
-    // `auth` primero para poblar req.user; el limiter se keyea por usuario.
+    // `auth` first to populate req.user; the limiter is keyed by user.
     auth(USER_ROLE.user),
     bondCreateLimiter,
     validateRequest(bondRequestValidation.createBondRequestValidationSchema),
@@ -19,9 +19,8 @@ router.post(
 
 router.get(
     '/all-bond-requests',
-    // Admin-only: el front no lo usa; para un usuario común era un dump del dataset
-    // (todos los bonos, incluidos pausados/linkeados/ajenos). Los propios van por
-    // /my-bond-requests.
+    // Admin-only: for a regular user this dumped the whole dataset (every bond,
+    // paused/linked/foreign included). Own bonds go through /my-bond-requests.
     auth(USER_ROLE.admin, USER_ROLE.superAdmin),
     bondRequestController.getAllBondRequests
 );
@@ -46,14 +45,9 @@ router.get(
     bondRequestController.getLastBond
 );
 
-// Editar el CONTENIDO de un vínculo está prohibido, pero PAUSAR no: pausado es
-// uno de los tres estados válidos de un vínculo (activo / pausado / eliminado) y
-// es el único interruptor que lo saca del pool de matcheo.
-//
-// Esta ruta llegó a estar cortada con un 403 plano, y eso rompió el botón de
-// pausa del front, que pega justo acá con `{isPause}`. El bloqueo ahora es por
-// CAMPO, dentro del service: sólo pasa `isPause`; cualquier otro campo (offer,
-// want, description, location, radius, modality) se rechaza con 403.
+// Editing a bond's content is forbidden, but pausing is not: paused is the only
+// switch that removes it from the matching pool. The block is per field in the
+// service: only `isPause` passes; any other field is rejected with 403.
 router.patch(
     '/update/:id',
     auth(USER_ROLE.user),

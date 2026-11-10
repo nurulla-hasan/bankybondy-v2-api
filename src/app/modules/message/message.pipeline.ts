@@ -1,15 +1,7 @@
 /*
- * Las etapas de agregación de `getMessages`, separadas del service para que sus
- * reglas silenciosas se puedan probar sin base de datos ni red:
- *
- *  - `seen` se deriva de `seenBy` (y `seenBy` NO viaja al cliente: nombra a
- *    todos los lectores de un mensaje, es una fuga aparte),
- *  - el contenido de un mensaje borrado sigue anulado por `$cond`,
- *  - el bloqueo se aplica por autor, no por conversación.
- *
- * Cambiar el orden o las claves de estas etapas rompe contrato con clientes que
- * no podemos inspeccionar (v1 y la app nativa), así que lo que antes era un
- * literal inlineado sin test es ahora un módulo con test.
+ * Aggregation stages of `getMessages`, split out so their silent rules are
+ * testable: `seen` derives from `seenBy` (never sent), deleted content is nulled
+ * by `$cond`, blocking applies per author. Order and keys are a client contract.
  */
 import type { Types } from 'mongoose';
 import { escapeRegex } from '../../utilities/escapeRegex';
@@ -48,18 +40,14 @@ export const buildMessagesPipeline = ({
     {
         $addFields: {
             isMyMessage: { $eq: ['$msgByUserId', requesterObjectId] },
-            // Antes era `seen: 1` en la proyección: un campo que NO existe en el
-            // schema, así que nunca aparecía en la respuesta. Se calcula acá
-            // porque `$project` no puede leer `seenBy` y a la vez ocultarlo.
+            // Computed here because `$project` cannot read `seenBy` and hide it.
             seen: {
                 $in: [requesterObjectId, { $ifNull: ['$seenBy', []] }],
             },
         },
     },
     {
-        // M2: un mensaje BORRADO (isDeleted) no debe viajar con su contenido en
-        // el payload. Antes se devolvía text/imageUrl/videoUrl/pdfUrl igual y el
-        // front solo lo ocultaba, pero la data seguía en la respuesta de red.
+        // A deleted message must not ship its content in the payload.
         $project: {
             text: { $cond: ['$isDeleted', null, '$text'] },
             imageUrl: { $cond: ['$isDeleted', null, '$imageUrl'] },
