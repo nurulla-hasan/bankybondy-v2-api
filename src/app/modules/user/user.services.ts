@@ -11,6 +11,7 @@ import AppError from '../../error/appError';
 import registrationSuccessEmailBody from '../../mailTemplate/registerSucessEmail';
 import sendEmail from '../../utilities/sendEmail';
 import Audio from '../audio/audio.model';
+import Admin from '../admin/admin.model';
 import { INormalUser } from '../normalUser/normalUser.interface';
 import NormalUser from '../normalUser/normalUser.model';
 import { IRecommendedUser } from '../recommendedUser/recommendedUser.interface';
@@ -316,13 +317,16 @@ const deleteUserAccount = async (user: JwtPayload, password: string) => {
 };
 
 const getMyProfile = async (userData: JwtPayload) => {
-    let result: any = null;
     if (userData.role === USER_ROLE.user) {
-        result = await NormalUser.findOne({ email: userData.email });
-    } else if (userData.role === USER_ROLE.superAdmin) {
-        result = await SuperAdmin.findOne({ email: userData.email });
+        return NormalUser.findOne({ email: userData.email });
     }
-    return result;
+    if (userData.role === USER_ROLE.admin) {
+        return Admin.findOne({ email: userData.email, isDeleted: false });
+    }
+    if (userData.role === USER_ROLE.superAdmin) {
+        return SuperAdmin.findOne({ email: userData.email });
+    }
+    return null;
 };
 
 // User cleanup cron jobs.

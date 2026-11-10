@@ -16,6 +16,11 @@ router.post(
 );
 // /google-login removed for security: it accepted an unverified email (account
 // takeover). Google login goes through /oauth-login, which verifies the idToken.
+router.get(
+    '/me',
+    auth(USER_ROLE.user, USER_ROLE.admin, USER_ROLE.superAdmin),
+    authControllers.getMe
+);
 router.post(
     '/change-password',
     auth(USER_ROLE.user, USER_ROLE.admin, USER_ROLE.superAdmin),

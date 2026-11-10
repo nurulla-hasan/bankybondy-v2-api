@@ -11,6 +11,8 @@ export const updateSuperAdminSchema = z.object({
             .nonempty('Email is required')
             .optional(),
         profile_image: z.string().optional().default(''),
+        contact: z.string().optional(),
+        address: z.string().optional(),
     }),
 });
 

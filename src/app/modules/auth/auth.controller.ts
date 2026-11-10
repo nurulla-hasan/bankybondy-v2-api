@@ -10,6 +10,7 @@ import {
     buildSocketTokenClaims,
 } from '../../helper/socketToken';
 import authServices from './auth.services';
+import userServices from '../user/user.services';
 import AppError from '../../error/appError';
 import {
   clearAuthCookies,
@@ -217,6 +218,27 @@ const oAuthLogin = catchAsync(async (req, res) => {
   });
 });
 
+// Current session's profile (name, contact, image, ...). The access token only
+// carries id/profileId/email/role, so clients cannot render a profile without this.
+const getMe = catchAsync(async (req, res) => {
+  const result = await userServices.getMyProfile(req.user);
+
+  if (!result) {
+    throw new AppError(
+      httpStatus.NOT_FOUND,
+      'Profile not found for the current session',
+      'PROFILE_MISSING'
+    );
+  }
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    success: true,
+    message: 'Profile retrieved successfully',
+    data: result,
+  });
+});
+
 const authControllers = {
   loginUser,
   changePassword,
@@ -229,6 +251,7 @@ const authControllers = {
   resendResetCode,
   resendVerifyCode,
   oAuthLogin,
+  getMe,
 };
 
 export default authControllers;

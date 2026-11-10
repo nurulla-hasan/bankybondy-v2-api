@@ -52,10 +52,4 @@ router.delete(
     userControllers.deleteUserAccount
 );
 
-router.get(
-    '/get-my-profile',
-    auth(USER_ROLE.user, USER_ROLE.superAdmin),
-    userControllers.getMyProfile
-);
-
 export const userRoutes = router;
