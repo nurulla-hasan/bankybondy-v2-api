@@ -230,14 +230,19 @@ export const MATCHING = {
     // "Ofrecer vacío" = dar nada, así que satisface distinto según qué te pidan:
     //   - vacío(deseo) ← vacío(oferta) = emptyEncounter (ALTO): el "encuentro" —
     //     dos que no ofrecen ni piden nada y se calzan perfecto (la app de citas).
-    //   - vacío ↔ sorpresa = emptyMixed (piso del gate): matchea pero FLOJO —
-    //     alguien recibe nada teniendo un deseo abierto.
+    //   - vacío ↔ sorpresa = emptyMixed (MATCH SÓLIDO, por debajo del encuentro):
+    //     alguien recibe nada teniendo un deseo abierto. Antes valía exactamente
+    //     `minScore` (0.4), o sea el mínimo para pasar el gate: cualquier suba de
+    //     MATCH_MIN_SCORE lo hacía desaparecer en silencio y, en la práctica,
+    //     "vacío" solo parecía matchear con "vacío". Ahora tiene margen sobre el
+    //     gate y rankea por encima de los cruces débiles, sin alcanzar al 0.9 del
+    //     encuentro.
     //   - vacío ↔ concreto = 0 (EXCLUIDO, estructural): "nada por algo puntual" no
     //     es trueque; la arista queda en 0 y el par/eslabón lo filtra `passesGate`.
-    // emptyMixed decide la INCLUSIÓN: >= minScore (0.4) → esos matches existen (flojos);
-    // < minScore → no se arman (lista más limpia, pero se pierde visibilidad cruzada).
+    // emptyMixed debe quedar por encima de minScore (0.4) y por debajo de
+    // emptyEncounter (0.9).
     emptyEncounter: num(process.env.MATCH_EMPTY_ENCOUNTER, 0.9, { min: 0, max: 1 }),
-    emptyMixed: num(process.env.MATCH_EMPTY_MIXED, 0.4, { min: 0, max: 1 }),
+    emptyMixed: num(process.env.MATCH_EMPTY_MIXED, 0.55, { min: 0, max: 1 }),
 
     // Comodines como NEXOS de cadena. Los bonds cuyo deseo u oferta es 'surprise'
     // o 'empty' tienen vectores SIN señal semántica, así que la búsqueda vectorial

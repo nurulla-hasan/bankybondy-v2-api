@@ -103,7 +103,8 @@ export const surpriseAdjustedScore = (
 /** Puntaje de una arista "deseo ← oferta" que involucra el comodín 'vacío' (nada).
  *  Implementa la fila/columna "Vacío" de la tabla de la spec (Matcheo-Comodines-Spec):
  *   - vacío(deseo) ← vacío(oferta)                → `encounter` (ALTO): el encuentro.
- *   - vacío(deseo) ← sorpresa  /  sorpresa(deseo) ← vacío → `mixed` (flojo).
+ *   - vacío(deseo) ← sorpresa  /  sorpresa(deseo) ← vacío → `mixed` (sólido, pero
+ *     por debajo del encuentro: debe superar `minScore` con margen).
  *   - vacío(deseo) ← concreto  /  concreto(deseo) ← vacío → 0 (EXCLUIDO).
  *  A 'vacío' no le sirve la similitud del vector (no tiene señal semántica: se
  *  parece solo a sí mismo), por eso se resuelve SOLO por banda. Llamar únicamente

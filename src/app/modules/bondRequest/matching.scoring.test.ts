@@ -3,6 +3,7 @@
  *   node --experimental-strip-types matching.scoring.test.ts
  * (ajustando los imports con extensión .ts). */
 import * as s from './matching.scoring';
+import { MATCHING } from './matching.config';
 import { specialEntryColor, SPECIAL_COLORS } from './matching.colors';
 
 type Case = [name: string, cond: boolean];
@@ -70,6 +71,13 @@ const cases: Case[] = [
         s.emptyEdgeScore(true, false, true, false, 0.9, 0.4) > s.emptyEdgeScore(false, true, true, false, 0.9, 0.4)],
     ['vacío↔concreto NO pasa el gate (arista 0 → excluido)',
         s.passesGate(s.emptyEdgeScore(false, false, true, false, 0.9, 0.4), 0.9) === false],
+    // Config REAL: vacío↔sorpresa debe superar el gate con MARGEN (no quedar justo
+    // en 0.4, donde cualquier suba de MATCH_MIN_SCORE lo hacía desaparecer) y
+    // seguir por debajo del encuentro vacío↔vacío.
+    ['default: vacío↔sorpresa supera el gate con margen',
+        s.emptyEdgeScore(true, false, false, true) > MATCHING.minScore],
+    ['default: vacío↔sorpresa < vacío↔vacío',
+        s.emptyEdgeScore(true, false, false, true) < s.emptyEdgeScore(true, false, true, false)],
     // Robustez geo/frescura: entradas ausentes NO rompen (devuelven neutro, sin throw).
     ['prox sin datos = 1 (no throw)', s.proximityFactor(undefined, undefined) === 1],
     ['frescura sin fecha = 1 (no throw)', s.freshnessFactor(undefined) === 1],
