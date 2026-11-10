@@ -7,3 +7,4 @@ logs/
 !.env.example
 *.log
 .DS_Store
+.fuse_hidden*
