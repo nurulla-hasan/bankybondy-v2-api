@@ -14,7 +14,8 @@
     "seed:bonds": "tsx src/scripts/seedBonds.ts",
     "match-feed:backfill": "tsx src/scripts/backfillMatchFeed.ts",
     "match-feed:verify": "tsx src/scripts/verifyMatchFeed.ts",
-    "match-feed:bench": "tsx src/scripts/benchMatchServe.ts"
+    "match-feed:bench": "tsx src/scripts/benchMatchServe.ts",
+    "match:bench": "tsx src/scripts/benchMatchCompute.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",

@@ -1,26 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/* Obtención de candidatos para el matcheo de bonds — a escala.
- *
- * Reemplaza el "$sample: 150 al azar" por una búsqueda semántica de vecinos
- * (Atlas Vector Search), SIN cambiar la lógica de match mutuo ni de ciclos.
- *
- * Estrategia (ver DISENO_MATCHEO_BONDS.md §4 y §8):
- *   - Búsqueda A (salida): bonds cuya OFERTA se parece a lo que YO QUIERO.
- *   - Búsqueda B (entrada): bonds cuyo DESEO se parece a lo que YO OFREZCO.
- *   - Unión de A y B = candidatos → cubre pares y ciclos de 3.
- *   - Expansión de frontera de 1 salto en ambas direcciones → trae los
- *     "nodos del medio" de las cadenas, cubriendo ciclos de 4 y 5 de forma
- *     demostrable (no por azar).
- *   - Geo se aplica como $match posterior (solo bonds físicos con radio).
- *
- * Fallback automático: si el índice vectorial no existe todavía (o el bond
- * de partida no tiene vectores), cae al $sample actual. Así se puede desplegar
- * el código antes de crear el índice en Atlas, sin ventanas de caída.
- */
+
 import mongoose from 'mongoose';
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import BondRequest from './bondRequest.model';
 import { MATCHING } from './matching.config';
+import { knnSearch } from './matching.vectorStore';
 import { errorLogger } from '../../shared/logger';
 
 export type CandidateFetchMethod = 'vector' | 'sample';
@@ -64,6 +47,9 @@ const runVectorSearch = async (
     baseFilter: Record<string, unknown>,
     geoFilter: Record<string, unknown>
 ): Promise<any[]> => {
+    if (process.env.MATCH_CANDIDATE_MODE === 'knn') {
+        return knnSearch(path, queryVector, limit, baseFilter, geoFilter);
+    }
     const pipeline: any[] = [
         {
             $vectorSearch: {
