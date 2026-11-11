@@ -44,7 +44,7 @@ const cases: Case[] = [
     ['fan-out: ids duplicados no duplican filas', dupDocs.length === 2],
     ['fan-out: array vacío no produce filas', recordToFeedDocs({ ...record, ids: [], users: [] }, A).length === 0],
     ['ranking: par sin castigo', rankScoreOf(0.8, 2, false) === 0.8],
-    ['ranking: ciclo descuenta pairBias', Math.abs(rankScoreOf(0.8, 3, false) - (0.8 - 0.05)) < 1e-9],
+    ['ranking: ciclo descuenta pairBias', Math.abs(rankScoreOf(0.8, 3, false) - (0.8 - MATCHING.pairBias)) < 1e-9],
     ['ranking: legacy no descuenta', rankScoreOf(0.8, 4, true) === 0.8],
     ['top keys: ordena por score desc', topMatchKeys([{ matchKey: 'x', score: 0.1 }, { matchKey: 'y', score: 0.9 }], 1)[0] === 'y'],
     ['top keys: deriva la firma si falta matchKey', topMatchKeys([{ bonds: [B, A], score: 0.9 }], 1)[0] === `${A}|${B}`],

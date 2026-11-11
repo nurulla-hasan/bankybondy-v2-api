@@ -85,7 +85,7 @@ export const MATCHING = {
     // Soft preference for shorter chains, applied at SERVING as a ranking subtraction: per
     // member beyond 2 discount `pairBias` (size 2 = 0, 3 = -pairBias, ...). Not a dictator.
     // 0 = no preference. Env-tunable without recompute (applied when reading the cache).
-    pairBias: num(process.env.MATCH_PAIR_BIAS, 0.05),
+    pairBias: num(process.env.MATCH_PAIR_BIAS, 0.02),
 
     // Safety switch. 'false' (default) = new ranking: by score, cycle uses the same blend as
     // pairs (0.7·min + 0.3·avg), pairBias as soft preference. 'true' = old ranking (hard
@@ -173,13 +173,13 @@ export const MATCHING = {
 
     // ── PER-PARTICIPANT READ MODEL (BondMatchFeed) ──────────────────────────
     // Serving reads the N best rows of a bond's own feed via { bond: 1, score: -1 } instead of
-    // the whole BondMatch superset. Flags support the expand/contract rollout.
+    // the whole BondMatch superset. Rollout complete: both default on; rollback = env both false.
     feedWrite:
-        (process.env.MATCH_FEED_WRITE ?? 'false').toLowerCase() === 'true',
+        (process.env.MATCH_FEED_WRITE ?? 'true').toLowerCase() === 'true',
     feedShadow:
         (process.env.MATCH_FEED_SHADOW ?? 'false').toLowerCase() === 'true',
     feedRead:
-        (process.env.MATCH_FEED_READ ?? 'false').toLowerCase() === 'true',
+        (process.env.MATCH_FEED_READ ?? 'true').toLowerCase() === 'true',
     // Fraction of requests (0–1) running the shadow comparison with the OLD slow query;
     // sampling is mandatory.
     feedShadowSample: num(process.env.MATCH_FEED_SHADOW_SAMPLE, 0.1, {
