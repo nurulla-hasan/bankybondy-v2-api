@@ -183,9 +183,13 @@ const getAllUser = async (
             NormalUser.find().populate({ path: 'user', select: 'isBlocked' }),
             query
         )
-            .search(['name'])
+            // Admin panel searches by email too: there is no enumeration risk
+            // because every caller here is authenticated as staff.
+            .search(['name', 'email'])
             .fields()
-            .filter()
+            // Admin panel filters by plan. Safe to allowlist: the base find has
+            // no owner scope (it is the staff listing), unlike the my-* endpoints.
+            .filter(['subscriptionType'])
             .paginate()
             .sort();
 
@@ -739,12 +743,16 @@ const getAllUser = async (
 };
 
 const getSingleUser = async (viewer: JwtPayload, id: string) => {
-    const user = await getSingleUserWithStatus(viewer.profileId, id);
-    // Strip PII unless the viewer is the owner or an admin.
     const isSelf = String(viewer.profileId) === String(id);
     const isAdmin =
         viewer.role === USER_ROLE.admin ||
         viewer.role === USER_ROLE.superAdmin;
+    // Staff panels must still open suspended or hidden profiles; the visibility
+    // rules below exist to hide them from regular users only.
+    const user = await getSingleUserWithStatus(viewer.profileId, id, {
+        viewerIsStaff: isAdmin,
+    });
+    // Strip PII unless the viewer is the owner or an admin.
     const result = { ...user };
     if (!isSelf && !isAdmin) {
         stripPrivateUserFields(result);
@@ -761,7 +769,8 @@ const getSingleUser = async (viewer: JwtPayload, id: string) => {
 
 export async function getSingleUserWithStatus(
     currentProfileId: string,
-    targetUserId: string
+    targetUserId: string,
+    options: { viewerIsStaff?: boolean } = {}
 ) {
     if (!mongoose.Types.ObjectId.isValid(currentProfileId)) {
         throw new AppError(
@@ -774,7 +783,7 @@ export async function getSingleUserWithStatus(
     }
 
     // Treat profiles with a block in either direction as nonexistent (404).
-    if (currentProfileId) {
+    if (!options.viewerIsStaff && currentProfileId) {
         const blockedIds = await getBlockedIdsFor(currentProfileId);
         if (blockedIds.includes(targetUserId)) {
             throw new AppError(httpStatus.NOT_FOUND, 'User not found');
@@ -793,7 +802,10 @@ export async function getSingleUserWithStatus(
 
     // Admin ban first: 404 must win over PROFILE_HIDDEN so a suspended and
     // hidden account does not reveal its existence.
-    if ((targetAccount as any)?.user?.isBlocked === true) {
+    if (
+        !options.viewerIsStaff &&
+        (targetAccount as any)?.user?.isBlocked === true
+    ) {
         throw new AppError(httpStatus.NOT_FOUND, 'User not found');
     }
 
@@ -803,7 +815,11 @@ export async function getSingleUserWithStatus(
     const isSelf =
         !!currentProfileId &&
         currentProfileId.toString() === targetUserId.toString();
-    if (!isSelf && (targetAccount as any)?.listedInPeople === false) {
+    if (
+        !options.viewerIsStaff &&
+        !isSelf &&
+        (targetAccount as any)?.listedInPeople === false
+    ) {
         const esAmigo = await FriendRequest.exists({
             status: ENUM_FRIEND_REQUEST_STATUS.Accepted,
             $or: [
