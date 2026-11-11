@@ -4,6 +4,15 @@
  * match is exact and fail-closed; CLOUDFRONT_URL can be injected for tests.
  */
 
+const cdnProtocolFromEnv = (): string => {
+    try {
+        const u = new URL(process.env.CLOUDFRONT_URL as string);
+        return u.protocol || 'https:';
+    } catch {
+        return 'https:';
+    }
+};
+
 const cdnHostFromEnv = (): string | null => {
     try {
         return new URL(process.env.CLOUDFRONT_URL as string).host;
@@ -24,8 +33,24 @@ export const isCdnAttachmentUrl = (
     } catch {
         return false; // not a valid absolute URL
     }
-    if (u.protocol !== 'https:') return false; // reject http/data/javascript/...
-    if (u.host !== cdnHost) return false; // exact host (no subdomain/path tricks)
+
+    let targetHost = cdnHost;
+    let expectedProtocol = 'https:';
+
+    if (cdnHost.includes('://')) {
+        try {
+            const parsed = new URL(cdnHost);
+            targetHost = parsed.host;
+            expectedProtocol = parsed.protocol;
+        } catch {
+            expectedProtocol = cdnProtocolFromEnv();
+        }
+    } else {
+        expectedProtocol = cdnProtocolFromEnv();
+    }
+
+    if (u.protocol !== expectedProtocol) return false;
+    if (u.host !== targetHost) return false; // exact host (no subdomain/path tricks)
     // The security property is the HOST; path is left to the S3 delete guard.
     return true;
 };
