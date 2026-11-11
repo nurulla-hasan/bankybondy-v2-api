@@ -44,7 +44,7 @@ export async function hasBondIdentity(
     return false;
 }
 
-const internalFields = new Set(['integrityRevision', 'offerKey', 'wantKey']);
+const internalFields = new Set(['integrityRevision', 'offerKey', 'wantKey', 'matchesComputeRevision']);
 
 export function publicBondData<T>(value: T): T {
     if (value == null || typeof value !== 'object') return value;

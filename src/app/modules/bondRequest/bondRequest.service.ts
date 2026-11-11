@@ -28,6 +28,8 @@ import { getBlockedIdsFor } from '../userBlock/userBlock.service';
 import { BondLink } from '../bondLink/bondLink.model';
 import { agendaVencida } from './matching.schedule';
 import { MATCHING } from './matching.config';
+import { getMatchingSettings } from '../settings/matchingSettings.service';
+import { selectMatchingCache } from './matching.cache';
 import { COLOR_PALETTE, specialEntryColor, isEmptyToken } from './matching.colors';
 import { clampLimit, clampPage } from '../../utilities/pagination';
 import { publicMatchRequest } from './bondRequest.publicShape';
@@ -592,7 +594,7 @@ export const getMatchingBondRequest = async (
         isDeleted: { $ne: true },
     })
         .select(
-            'matchesComputedAt matchesNextAt lastServedAt isPause'
+            'matchesComputedAt matchesComputeRevision matchesNextAt lastServedAt isPause'
         )
         .lean();
 
@@ -629,8 +631,10 @@ export const getMatchingBondRequest = async (
     const lecturaInicio = Date.now();
     let cached: any[];
     if (MATCHING.feedRead) {
-        cached = await BondMatchFeed.find({ bond: bondRequestId })
-            .sort({ score: -1, _id: 1 })
+        cached = await BondMatchFeed.find({ bond: bondRequestId,
+            computedAt: { $gt: new Date(Date.now() - MATCHING.serveTtlMinutes * 60000) },
+        })
+            .sort({ computeRevision: -1, score: -1, _id: 1 })
             .limit(MATCHING.feedScanLimit)
             // Otherwise the driver fetches 101 docs then issues a getMore:
             // ~400 ms extra RTT on remote Atlas.
@@ -646,7 +650,7 @@ export const getMatchingBondRequest = async (
         { mode: MATCHING.feedRead ? 'feed' : 'legacy' },
         (Date.now() - lecturaInicio) / 1000
     );
-    const ttlMs = MATCHING.cacheTtlMinutes * 60 * 1000;
+    const settings = await getMatchingSettings();
 
     // Real-interest signal: opening this screen is what keeps the bond HOT (1 h TTL
     // instead of 24 h). Guard 1: `timestamps: false` — otherwise the write bumps
@@ -671,55 +675,18 @@ export const getMatchingBondRequest = async (
         ).catch(() => undefined);
     }
 
-    const edadCacheMs =
-        cached.length > 0 && cached[0].computedAt
-            ? Date.now() - new Date(cached[0].computedAt).getTime()
-            : Infinity;
-
-    // ttlMs: when to refresh. ttlServibleMs: how long stale data stays servable
-    // (avoids a spinner when the cache is old but valid). Serving stale data while
-    // enqueuing a user-priority refresh is strictly better than an empty 'computing'.
-    const ttlServibleMs = MATCHING.serveTtlMinutes * 60 * 1000;
-    const hayCacheServible = edadCacheMs < ttlServibleMs;
-    const cacheVencida = edadCacheMs >= ttlMs;
-
-    if (!hayCacheServible) {
-        // Nothing servable. Previous logic kept: recently computed + no cache means
-        // it computed and found zero matches → 'ready' with empty data (the front
-        // stops polling); otherwise enqueue and return 'computing' immediately.
-        const computedAt = (startRequest as any).matchesComputedAt;
-        const recentlyComputed =
-            !!computedAt &&
-            Date.now() - new Date(computedAt).getTime() < ttlMs;
-
-        if (!recentlyComputed) {
-            // Fire-and-forget background computation.
-            enqueueRecompute(bondRequestId, MATCH_PRIORITY_USER);
-        }
-
-        bondMatchStatusTotal.inc({
-            status: recentlyComputed ? 'ready' : 'computing',
-        });
-
-        return {
-            // 'ready' = finished (zero matches here); 'computing' = enqueued,
-            // the front must retry.
-            status: recentlyComputed ? 'ready' : 'computing',
-            reactivated,
-            total: 0,
-            page,
-            limit,
-            data: [] as any[],
-        };
+    const selected = selectMatchingCache(cached, {
+        computeRevision: settings.computeRevision,
+        cacheTtlMinutes: settings.cacheTtlMinutes,
+        serveTtlMinutes: MATCHING.serveTtlMinutes,
+    }, startRequest);
+    if (selected.shouldRefresh) enqueueRecompute(bondRequestId, MATCH_PRIORITY_USER);
+    if (!selected.records.length) {
+        const status = selected.shouldRefresh ? 'computing' : 'ready';
+        bondMatchStatusTotal.inc({ status });
+        return { status, reactivated, total: 0, page, limit, data: [] as any[] };
     }
-
-    // Servable cache. If also expired, refresh in the background with user priority
-    // while serving what we have; BullMQ's `jobId` dedup keeps reloads from stacking jobs.
-    if (cacheVencida) {
-        enqueueRecompute(bondRequestId, MATCH_PRIORITY_USER);
-    }
-
-    const records: any[] = cached;
+    const records: any[] = selected.records;
 
     const matches: {
         ids: string[];

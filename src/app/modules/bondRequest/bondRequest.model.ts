@@ -77,6 +77,7 @@ const BondRequestSchema = new Schema<IBondRequest>(
         // computeAndCacheMatches). Lets serving tell "still computing" from
         // "computed, zero matches": recent + no cache means zero, stop polling.
         matchesComputedAt: { type: Date },
+        matchesComputeRevision: { type: Number, default: 0 },
         // AGENDA of the next recompute (scale: matching.schedule.ts). A FUTURE
         // instant, so the sweep is one indexed range query (`matchesNextAt <=
         // now`). Epoch default: new bonds are due at once and the field is always

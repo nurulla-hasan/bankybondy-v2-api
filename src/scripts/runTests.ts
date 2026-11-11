@@ -20,6 +20,11 @@ import { runQueryBuilderTests } from '../app/builder/QueryBuilder.test';
 import { runInputValidationTests } from '../app/modules/bondRequest/inputValidation.test';
 import { runMatchingScheduleTests } from '../app/modules/bondRequest/matching.schedule.test';
 import { runMatchingFeedTests } from '../app/modules/bondRequest/matching.feed.test';
+import { runMatchingCacheTests } from '../app/modules/bondRequest/matching.cache.test';
+import { runMatchingRevisionTests } from '../app/modules/bondRequest/matching.revision.test';
+import { runMatchingRuntimeTests } from '../app/modules/bondRequest/matching.runtime.test';
+import { runMatchingSweepTests } from '../app/modules/bondRequest/matching.sweep.test';
+import { runMatchingSettingsTests } from '../app/modules/settings/matchingSettings.test';
 import { runSubscriptionPlanTests } from '../app/modules/normalUser/subscriptionPlans.test';
 import { runSubscriptionCheckoutTests } from '../app/modules/normalUser/subscriptionCheckout.test';
 import { runAudioModerationTests } from '../app/modules/audio/audio.moderation.test';
@@ -43,6 +48,11 @@ const main = async (): Promise<void> => {
         correr: () => { pass: number; fail: number } | Promise<{ pass: number; fail: number }>;
     }[] = [
         { nombre: 'matching.scoring', correr: runMatchingScoreTests },
+        { nombre: 'matching.cache', correr: runMatchingCacheTests },
+        { nombre: 'matching.revision', correr: runMatchingRevisionTests },
+        { nombre: 'matching.runtime', correr: runMatchingRuntimeTests },
+        { nombre: 'matching.sweep', correr: runMatchingSweepTests },
+        { nombre: 'matching.settings', correr: runMatchingSettingsTests },
         {
             nombre: 'matching.schedule (TTL adaptativo / escala)',
             correr: runMatchingScheduleTests,

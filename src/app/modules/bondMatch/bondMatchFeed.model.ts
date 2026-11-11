@@ -31,6 +31,7 @@ const BondMatchFeedSchema = new Schema<IBondMatchFeed>(
             required: true,
         },
         computedAt: { type: Date, default: Date.now },
+        computeRevision: { type: Number, default: 0 },
     },
     // Accounting rows: no updatedAt. `updatedAt` feeds freshnessFactor, and a
     // feed refresh must never move a bond's ranking.
@@ -41,6 +42,7 @@ const BondMatchFeedSchema = new Schema<IBondMatchFeed>(
 BondMatchFeedSchema.index({ bond: 1, matchKey: 1 }, { unique: true });
 // Serving: bounded top-N with a covered sort.
 BondMatchFeedSchema.index({ bond: 1, score: -1 });
+BondMatchFeedSchema.index({ bond: 1, computeRevision: -1, score: -1, _id: 1 });
 // Invalidation: every row that mentions a bond that was paused/deleted/blocked.
 BondMatchFeedSchema.index({ bonds: 1 });
 // Discoverer cleanup: rows this bond produced and no longer finds.

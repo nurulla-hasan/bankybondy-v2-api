@@ -29,7 +29,8 @@ export type FeedDoc = IBondMatchFeed;
 export const recordToFeedDocs = (
     record: MatchRecord,
     sourceBondId: string,
-    now: Date = new Date()
+    now: Date = new Date(),
+    computeRevision = 0
 ): FeedDoc[] => {
     const matchKey = buildMatchKey(record.ids);
     const sourceBond = new mongoose.Types.ObjectId(sourceBondId);
@@ -53,6 +54,7 @@ export const recordToFeedDocs = (
             size: record.size,
             sourceBond,
             computedAt: now,
+            computeRevision,
         });
     }
     return docs;
@@ -75,21 +77,26 @@ export const topMatchKeys = (
  *  serving reads the top `feedScanLimit` by score, so the kept window must cover that scan.
  *  No fixed pass cap: a dense bond must not keep a "top-N + tail" leftover. */
 export const trimFeedBond = async (
-    bond: mongoose.Types.ObjectId | string
+    bond: mongoose.Types.ObjectId | string,
+    computeRevision = Number.MAX_SAFE_INTEGER
 ): Promise<number> => {
     const bondId =
         typeof bond === 'string' ? new mongoose.Types.ObjectId(bond) : bond;
     let deleted = 0;
     for (let pass = 0; pass < 1000; pass++) {
         const extra = await BondMatchFeed.find({ bond: bondId })
-            .sort({ score: -1, _id: 1 })
+            .sort({ computeRevision: -1, score: -1, _id: 1 })
             .skip(MATCHING.feedMaxRowsPerBond)
             .limit(1000)
-            .select('_id')
+            .select('_id computeRevision')
             .lean();
-        if (!extra.length) break;
+        const removable = extra.filter((row) => (row.computeRevision ?? 0) <= computeRevision);
+        if (!removable.length) break;
         const res = await BondMatchFeed.deleteMany({
-            _id: { $in: extra.map((e) => e._id) },
+            $or: removable.map((row) => ({
+                _id: row._id,
+                computeRevision: (row.computeRevision ?? 0) === 0 ? { $in: [0, null] } : row.computeRevision,
+            })),
         });
         const n = res.deletedCount ?? 0;
         deleted += n;
@@ -99,24 +106,25 @@ export const trimFeedBond = async (
     return deleted;
 };
 
-/** Upsert that keeps the BEST score when the same deal arrives from another
- *  discoverer (or an old legacy row); legacy serving keeps the max too. */
-const feedUpsertUpdate = (doc: FeedDoc) => {
-    const mejor = { $gt: [doc.score, { $ifNull: ['$score', -1] }] };
-    return [
-        {
-            $set: {
-                bonds: doc.bonds,
-                users: doc.users,
-                type: doc.type,
-                size: doc.size,
-                sourceBond: doc.sourceBond,
-                computedAt: doc.computedAt,
-                score: { $cond: [mejor, doc.score, '$score'] },
-                parts: { $cond: [mejor, doc.parts, '$parts'] },
-            },
-        },
-    ];
+export const feedUpsertUpdate = (doc: FeedDoc) => {
+    const revision = doc.computeRevision ?? 0;
+    const storedRevision = { $ifNull: ['$computeRevision', 0] };
+    const accepted = { $gte: [revision, storedRevision] };
+    const better = { $or: [
+        { $gt: [revision, storedRevision] },
+        { $and: [{ $eq: [revision, storedRevision] }, { $gt: [doc.score, { $ifNull: ['$score', -1] }] }] },
+    ] };
+    return [{ $set: {
+        bonds: { $cond: [accepted, doc.bonds, '$bonds'] },
+        users: { $cond: [accepted, doc.users, '$users'] },
+        type: { $cond: [accepted, doc.type, '$type'] },
+        size: { $cond: [accepted, doc.size, '$size'] },
+        sourceBond: { $cond: [accepted, doc.sourceBond, '$sourceBond'] },
+        computedAt: { $cond: [accepted, doc.computedAt, '$computedAt'] },
+        computeRevision: { $cond: [accepted, revision, '$computeRevision'] },
+        score: { $cond: [better, doc.score, '$score'] },
+        parts: { $cond: [better, doc.parts, '$parts'] },
+    } }];
 };
 
 export interface PersistFeedStats {
@@ -134,7 +142,8 @@ export interface PersistFeedStats {
  */
 export const persistMatchFeed = async (
     sourceBondId: string,
-    records: MatchRecord[]
+    records: MatchRecord[],
+    computeRevision: number
 ): Promise<PersistFeedStats> => {
     const now = new Date();
     const sourceBond = new mongoose.Types.ObjectId(sourceBondId);
@@ -144,7 +153,7 @@ export const persistMatchFeed = async (
     const ops: Parameters<typeof BondMatchFeed.bulkWrite>[0] = [];
     for (const record of records) {
         keys.add(buildMatchKey(record.ids));
-        for (const doc of recordToFeedDocs(record, sourceBondId, now)) {
+        for (const doc of recordToFeedDocs(record, sourceBondId, now, computeRevision)) {
             const bondId = doc.bond.toString();
             participants.set(bondId, doc.bond);
             ops.push({
@@ -172,6 +181,7 @@ export const persistMatchFeed = async (
         bond: sourceBond,
         sourceBond,
         matchKey: { $nin: [...keys] },
+        $or: [{ computeRevision: { $lte: computeRevision } }, { computeRevision: null }],
     });
 
     // One trim per participant, in batches: sequential was dozens of round-trips
@@ -181,7 +191,7 @@ export const persistMatchFeed = async (
     const ids = [...participants.values()];
     for (let i = 0; i < ids.length; i += TRIM_CONCURRENCY) {
         const batch = ids.slice(i, i + TRIM_CONCURRENCY);
-        const results = await Promise.all(batch.map((id) => trimFeedBond(id)));
+        const results = await Promise.all(batch.map((id) => trimFeedBond(id, computeRevision)));
         for (const n of results) trimmed += n;
     }
 

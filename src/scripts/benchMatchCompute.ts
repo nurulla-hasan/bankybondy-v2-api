@@ -12,9 +12,7 @@ import { buildMatchKey } from '../app/modules/bondRequest/matching.feed';
 
 const BONDS = Math.max(1, Number(process.env.BENCH_BONDS) || 20);
 const RUNS = Math.max(1, Number(process.env.BENCH_RUNS) || 15);
-const MODE = process.env.MATCH_CANDIDATE_MODE || 'vector';
-const LABEL =
-    (process.env.BENCH_LABEL || '').trim() || (MODE === 'knn' ? 'knn' : 'vector');
+import { getMatchingSettings } from '../app/modules/settings/matchingSettings.service';
 const SNAP_TTL_MS = Number(process.env.MATCH_KNN_SNAPSHOT_TTL_MS ?? 3000);
 
 /** Nearest-rank percentile over a copy (doesn't mutate the input). */
@@ -40,6 +38,9 @@ type BenchRow = { key: string; score: number };
 
 const main = async (): Promise<void> => {
     await mongoose.connect(config.database_url as string, { maxPoolSize: 50 });
+    const settings = await getMatchingSettings(true);
+    const MODE = settings.candidateMode;
+    const LABEL = (process.env.BENCH_LABEL || '').trim() || MODE;
 
     const bonds = await BondRequest.find({
         status: ENUM_BOND_REQUEST_STATUS.WAITING_FOR_LINK,
@@ -71,12 +72,12 @@ const main = async (): Promise<void> => {
         if (!userId) continue;
 
         // Warm-up (discarded): warms the kNN snapshot and the JIT.
-        await computeMatchesForBond({ ...bond }, userId);
+        await computeMatchesForBond({ ...bond }, userId, settings);
 
         let records: any[] = [];
         for (let i = 0; i < RUNS; i++) {
             const t0 = performance.now();
-            records = await computeMatchesForBond({ ...bond }, userId);
+            records = await computeMatchesForBond({ ...bond }, userId, settings);
             totalRuns.push(performance.now() - t0);
         }
 
@@ -89,7 +90,7 @@ const main = async (): Promise<void> => {
 
         for (let i = 0; i < RUNS; i++) {
             const t0 = performance.now();
-            await fetchMatchCandidates({ ...bond }, bondId, userId, {});
+            await fetchMatchCandidates({ ...bond }, bondId, userId, {}, settings);
             candidateRuns.push(performance.now() - t0);
         }
     }

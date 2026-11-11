@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import BondRequest from './bondRequest.model';
 import { MATCHING } from './matching.config';
+import type { MatchingSettingsSnapshot } from '../settings/matchingSettings.interface';
 import { knnSearch } from './matching.vectorStore';
 import { errorLogger } from '../../shared/logger';
 
@@ -42,9 +43,10 @@ const runVectorSearch = async (
     limit: number,
     numCandidates: number,
     baseFilter: Record<string, unknown>,
-    geoFilter: Record<string, unknown>
+    geoFilter: Record<string, unknown>,
+    candidateMode: MatchingSettingsSnapshot['candidateMode']
 ): Promise<any[]> => {
-    if (process.env.MATCH_CANDIDATE_MODE === 'knn') {
+    if (candidateMode === 'knn') {
         return knnSearch(path, queryVector, limit, baseFilter, geoFilter);
     }
     const pipeline: any[] = [
@@ -127,7 +129,8 @@ export const fetchMatchCandidates = async (
     startRequest: any,
     bondRequestId: string,
     userId: string,
-    geoFilter: Record<string, unknown>
+    geoFilter: Record<string, unknown>,
+    settings: Readonly<MatchingSettingsSnapshot>
 ): Promise<CandidateFetchResult> => {
     const startId = bondRequestId.toString();
 
@@ -167,7 +170,8 @@ export const fetchMatchCandidates = async (
                     MATCHING.candidateK,
                     MATCHING.numCandidates,
                     baseFilter,
-                    geoFilter
+                    geoFilter,
+                    settings.candidateMode
                 ),
                 runVectorSearch(
                     'wantVector',
@@ -175,7 +179,8 @@ export const fetchMatchCandidates = async (
                     MATCHING.candidateK,
                     MATCHING.numCandidates,
                     baseFilter,
-                    geoFilter
+                    geoFilter,
+                    settings.candidateMode
                 ),
             ]);
 
@@ -191,13 +196,13 @@ export const fetchMatchCandidates = async (
             add(inNeighbors);
 
             // Frontier expansion (1 hop, both directions) to reach middle nodes of 4–5 chains.
-            if (MATCHING.frontierEnabled) {
+            if (settings.frontierEnabled) {
                 const outSeeds = outNeighbors
                     .filter((d) => hasVector(d.wantVector))
-                    .slice(0, MATCHING.frontierSeeds);
+                    .slice(0, settings.frontierSeeds);
                 const inSeeds = inNeighbors
                     .filter((d) => hasVector(d.offerVector))
-                    .slice(0, MATCHING.frontierSeeds);
+                    .slice(0, settings.frontierSeeds);
 
                 const frontierQueries: Promise<any[]>[] = [];
                 // Forward: who OFFERS what my out-neighbor WANTS.
@@ -209,7 +214,8 @@ export const fetchMatchCandidates = async (
                             MATCHING.frontierK,
                             MATCHING.frontierNumCandidates,
                             baseFilter,
-                            geoFilter
+                            geoFilter,
+                            settings.candidateMode
                         )
                     );
                 }
@@ -222,7 +228,8 @@ export const fetchMatchCandidates = async (
                             MATCHING.frontierK,
                             MATCHING.frontierNumCandidates,
                             baseFilter,
-                            geoFilter
+                            geoFilter,
+                            settings.candidateMode
                         )
                     );
                 }

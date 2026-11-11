@@ -21,4 +21,5 @@ export interface IBondMatch {
     type: BondMatchType;
     size: number; // 2 = pair; >=3 = cycle
     computedAt: Date;
+    computeRevision?: number;
 }

@@ -13,6 +13,7 @@ import { errorLogger, logger } from './app/shared/logger';
 import { getIO, initializeSocket } from './app/socket/socket';
 import { closePresence } from './app/socket/presence';
 import { closeMatchingRobot } from './app/modules/bondRequest/matching.robot';
+import { initializeMatchingSettings } from './app/modules/settings/matchingSettings.service';
 import {
     esInstanciaLider,
     etiquetaInstancia,
@@ -56,6 +57,7 @@ async function main() {
             socketTimeoutMS: 45000,
         });
         logger.info('DB Connected Successfully');
+        await initializeMatchingSettings();
 
         // Config warning: Google login verifies the idToken against
         // GOOGLE_CLIENT_ID; if missing it fails at runtime. Boot continues, but

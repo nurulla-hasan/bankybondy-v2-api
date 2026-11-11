@@ -11,6 +11,8 @@ import { BondMatchType, IMatchScoreParts } from '../bondMatch/bondMatch.interfac
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import { fetchMatchCandidates } from './matching.candidates';
 import { MATCHING } from './matching.config';
+import { getMatchingSettings } from '../settings/matchingSettings.service';
+import type { MatchingSettingsSnapshot } from '../settings/matchingSettings.interface';
 import { persistMatchFeed } from './matching.feed';
 import {
     bondMatchFeedTrimDeletedTotal,
@@ -96,7 +98,8 @@ const directionalScoreF32 = (
     want: string,
     wantF32: Float32Array | null,
     offer: string,
-    offerF32: Float32Array | null
+    offerF32: Float32Array | null,
+    settings: Readonly<MatchingSettingsSnapshot>
 ): number => {
     const wantEmpty = normalizeText(want) === 'empty';
     const offerEmpty = normalizeText(offer) === 'empty';
@@ -111,7 +114,7 @@ const directionalScoreF32 = (
     // Without empty, the offer needs a real vector. 'surprise' does have one.
     if (!offerF32 || offerF32.length === 0) return 0;
     const sim = wantF32 && wantF32.length ? dot(wantF32, offerF32) : 0;
-    return surpriseAdjustedScore(sim, wantSurprise, offerSurprise);
+    return surpriseAdjustedScore(sim, wantSurprise, offerSurprise, settings.surpriseFloor, settings.surpriseMargin);
 };
 
 /** Haversine distance in km between two [lng, lat] points. */
@@ -144,7 +147,8 @@ const getPairMatchType = (candidate: any): MatchType => {
 /** Computes all possible deals (pairs + cycles of 3–N) for a starting bond. */
 export const computeMatchesForBond = async (
     startRequest: any,
-    userId: string
+    userId: string,
+    settings: Readonly<MatchingSettingsSnapshot>
 ): Promise<MatchRecord[]> => {
     const bondRequestId = startRequest._id.toString();
     const startUser = (startRequest.user?._id || startRequest.user)?.toString();
@@ -175,7 +179,8 @@ export const computeMatchesForBond = async (
         startRequest,
         bondRequestId,
         userId,
-        geoFilter
+        geoFilter,
+        settings
     );
 
     // Single pre-normalization of the 1536-dim vectors; from here the O(N²) hot loop is
@@ -240,13 +245,15 @@ export const computeMatchesForBond = async (
             startRequest.want,
             startRequest._wantF32,
             candidate.offer,
-            candidate._offerF32
+            candidate._offerF32,
+            settings
         );
         const s2 = directionalScoreF32(
             candidate.want,
             candidate._wantF32,
             startRequest.offer,
-            startRequest._offerF32
+            startRequest._offerF32,
+            settings
         );
 
         if (!passesGate(s1, s2)) continue;
@@ -298,7 +305,8 @@ export const computeMatchesForBond = async (
                 req.want,
                 req._wantF32,
                 toReq.offer,
-                toReq._offerF32
+                toReq._offerF32,
+                settings
             );
             if (score >= MATCHING.minScore) {
                 edges.get(id)!.push({ to: toId, score });
@@ -453,7 +461,8 @@ export const computeMatchesForBond = async (
 /** Replaces the precomputed deals in BondMatch for a starting bond. */
 export const persistMatches = async (
     sourceBondId: string,
-    records: MatchRecord[]
+    records: MatchRecord[],
+    computeRevision: number
 ): Promise<void> => {
     const sourceBond = new mongoose.Types.ObjectId(sourceBondId);
     const docs = records.map((r) => ({
@@ -465,22 +474,25 @@ export const persistMatches = async (
         type: r.type,
         size: r.size,
         computedAt: new Date(),
+        computeRevision,
     }));
-
-    // Atomic where supported (Atlas replica set): delete+insert in one transaction, so nobody
-    // sees 0 matches or duplicates when worker and request run concurrently.
+    // A delayed job may coexist with newer rows, but must never delete them.
+    const filter = { sourceBond, $or: [
+        { computeRevision: { $lte: computeRevision } }, { computeRevision: null },
+    ] };
     const session = await mongoose.startSession();
     try {
         await session.withTransaction(async () => {
-            await BondMatch.deleteMany({ sourceBond }, { session });
+            await BondMatch.deleteMany(filter, { session });
             if (docs.length) await BondMatch.insertMany(docs, { session });
         });
-    } catch {
-        // No transactions (Mongo standalone): sequential fallback.
-        await BondMatch.deleteMany({ sourceBond });
+    } catch (error) {
+        const failure = error as { code?: number; message?: string };
+        if (failure.code !== 20 || !failure.message?.includes('Transaction numbers are only allowed')) throw error;
+        await BondMatch.deleteMany(filter);
         if (docs.length) await BondMatch.insertMany(docs);
     } finally {
-        session.endSession();
+        await session.endSession();
     }
 };
 
@@ -489,8 +501,9 @@ export const computeAndCacheMatches = async (
     startRequest: any,
     userId: string
 ): Promise<MatchRecord[]> => {
-    const records = await computeMatchesForBond(startRequest, userId);
-    await persistMatches(startRequest._id.toString(), records);
+    const settings = await getMatchingSettings();
+    const records = await computeMatchesForBond(startRequest, userId, settings);
+    await persistMatches(startRequest._id.toString(), records, settings.computeRevision);
 
     // Per-participant read model (expand/contract). Best-effort during rollout: a failure falls
     // back to BondMatch and gets logged. When the feed is the read source it PROPAGATES: stale
@@ -499,7 +512,8 @@ export const computeAndCacheMatches = async (
         try {
             const stats = await persistMatchFeed(
                 startRequest._id.toString(),
-                records
+                records,
+                settings.computeRevision
             );
             bondMatchFeedUpsertsTotal.inc(stats.upserts);
             bondMatchFeedTrimDeletedTotal.inc(stats.trimmed);
@@ -534,12 +548,16 @@ export const computeAndCacheMatches = async (
     const filtroGen =
         genAlEmpezar === 0 ? { $in: [0, null] } : genAlEmpezar;
     const sellado = await BondRequest.updateOne(
-        { _id: startRequest._id, matchesGen: filtroGen },
+        { _id: startRequest._id, matchesGen: filtroGen, $or: [
+            { matchesComputeRevision: { $lte: settings.computeRevision } },
+            { matchesComputeRevision: null },
+        ] },
         {
             $set: {
                 // Serving reads this to know the compute ran even with zero `records`, so the
                 // front stops polling instead of staying "computing" forever.
                 matchesComputedAt: new Date(ahora),
+                matchesComputeRevision: settings.computeRevision,
                 matchesNextAt: proximoRecomputoEn({
                     ahora,
                     createdAt: creadoEn,

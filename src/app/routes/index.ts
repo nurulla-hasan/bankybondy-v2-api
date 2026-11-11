@@ -26,6 +26,7 @@ import { recommendedUserRoutes } from '../modules/recommendedUser/recommendedUse
 import { reportRoutes } from '../modules/report/report.routes';
 import { searchRoutes } from '../modules/search/search.routes';
 import { skillRoutes } from '../modules/skill/skill.routes';
+import { settingsRoutes } from '../modules/settings/matchingSettings.routes';
 import { superAdminRoutes } from '../modules/superAdmin/superAdmin.routes';
 import { topicRoutes } from '../modules/topic/topic.routes';
 import { transactionRoutes } from '../modules/transaction/transaction.routes';
@@ -166,6 +167,10 @@ const moduleRoutes = [
     {
         path: '/search',
         router: searchRoutes,
+    },
+    {
+        path: '/settings',
+        router: settingsRoutes,
     },
 ];
 

@@ -15,7 +15,8 @@ import {
     closeMatchingRobot,
     startMatchingWorker,
 } from './app/modules/bondRequest/matching.robot';
-import { startMatchingSweep } from './app/modules/bondRequest/matching.sweep';
+import { startMatchingSweep, stopMatchingSweep } from './app/modules/bondRequest/matching.sweep';
+import { getMatchingSettings } from './app/modules/settings/matchingSettings.service';
 import { startAudioSweep } from './app/modules/audio/audio.sweep';
 import { startTrendingSweep } from './app/modules/audio/trending.sweep';
 import { startDigestCron } from './app/modules/notificationDigest/digest.cron';
@@ -43,6 +44,10 @@ async function main() {
         });
         logger.info('[worker] DB Connected Successfully');
 
+        // API owns initialization. Missing settings must fail startup before any
+        // jobs are consumed; never seed from this worker's environment defaults.
+        await getMatchingSettings(true);
+
         // THE CONSUMER runs on ALL instances: real parallelism lives here. BullMQ
         // spreads jobs across every worker listening on the queue, so raising
         // `instances` multiplies COMPUTE capacity. Without Redis it falls back to
@@ -54,7 +59,7 @@ async function main() {
         // dedupe avoids computing thrice, but capacity does not rise and the query
         // is paid three times. See utilities/instancia.ts.
         if (esInstanciaLider()) {
-            startMatchingSweep();
+            await startMatchingSweep();
             // Durability safety net: reprocesses audios stuck in 'processing'
             // (e.g. a restart mid-analysis).
             startAudioSweep();
@@ -84,6 +89,7 @@ async function main() {
 const gracefulShutdown = async (signal: string) => {
     logger.info(`[worker] ${signal} received, shutting down gracefully`);
     try {
+        stopMatchingSweep();
         await closeMatchingRobot();
         await mongoose.connection.close();
         logger.info('[worker] Matching robot & DB connections closed');

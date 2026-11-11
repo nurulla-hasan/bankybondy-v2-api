@@ -29,6 +29,7 @@ export interface IBondRequest {
     // Set by the robot when this bond's matches finish computing/caching.
     // Distinguishes "computing" from "computed with no matches" at serving time.
     matchesComputedAt?: Date;
+    matchesComputeRevision?: number;
     // SCHEDULE of the next recompute (adaptive TTL; see matching.schedule.ts).
     // FUTURE instant. Absent = eligible now.
     matchesNextAt?: Date;

@@ -39,6 +39,7 @@ async function main() {
         '../../utilities/embedding': { generateEmbedding: async () => { calls++; return [1]; } },
         '../bondMatch/bondMatch.model': {}, '../bondMatch/bondMatchFeed.model': {},
         './matching.feed': { topMatchKeys: () => [] },
+        '../settings/matchingSettings.service': { getMatchingSettings: async () => ({ computeRevision: 0, cacheTtlMinutes: 60 }) },
         '../../middlewares/metrics': {}, '../../shared/logger': { logger: { warn() {}, error() {} } },
         '../userBlock/userBlock.service': { getBlockedIdsFor: async () => [] },
         '../bondLink/bondLink.model': { BondLink: links },

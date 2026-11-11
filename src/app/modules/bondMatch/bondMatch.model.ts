@@ -25,6 +25,7 @@ const BondMatchSchema = new Schema<IBondMatch>(
         },
         size: { type: Number, required: true },
         computedAt: { type: Date, default: Date.now },
+        computeRevision: { type: Number, default: 0 },
     },
     { timestamps: true }
 );

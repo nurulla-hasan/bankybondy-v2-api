@@ -15,7 +15,7 @@ export function loadBondService(file: string, dependencies: Record<string, unkno
     const safe = new Set([
         'http-status', '../../error/appError', '../../builder/QueryBuilder',
         '../../utilities/pagination', '../../utilities/enum',
-        './bondRequest.enum', './bondRequest.publicShape', './matching.schedule', './matching.config', './matching.colors',
+        './bondRequest.enum', './bondRequest.publicShape', './matching.schedule', './matching.config', './matching.colors', './matching.cache',
         './bondLink.enum', './bondLink.lifecycle', '../conversation/conversation.enum',
         '../bondRequest/bondRequest.enum', '../bondRequest/matching.colors',
         '../normalUser/normalUser.enum', './bondIdentity', './bondIntegrity', '../bondRequest/bondIntegrity',

@@ -16,4 +16,5 @@ export interface IBondMatchFeed {
     size: number;
     sourceBond: Types.ObjectId; // discoverer that produced this row
     computedAt: Date;
+    computeRevision?: number;
 }

@@ -11,6 +11,7 @@ import BondMatch from '../app/modules/bondMatch/bondMatch.model';
 import BondMatchFeed from '../app/modules/bondMatch/bondMatchFeed.model';
 import {
     buildMatchKey,
+    feedUpsertUpdate,
     trimFeedBond,
 } from '../app/modules/bondRequest/matching.feed';
 
@@ -39,7 +40,6 @@ const main = async (): Promise<void> => {
             .lean();
         if (!rows.length) break;
 
-        const now = new Date();
         // Dedupe within the batch: the same deal may be stored under two
         // discoverers (sometimes with different historical scores). Keep the BEST,
         // like the legacy serving (bestBySet).
@@ -62,7 +62,9 @@ const main = async (): Promise<void> => {
                 participants.add(bondId.toString());
                 const key = `${bondId.toString()}|${matchKey}`;
                 const prev = docs.get(key);
-                if (prev && prev.score >= row.score) continue;
+                const revision = row.computeRevision ?? 0;
+                if (prev && (prev.computeRevision > revision ||
+                    (prev.computeRevision === revision && prev.score >= row.score))) continue;
                 docs.set(key, {
                     bond: bondId,
                     matchKey,
@@ -78,7 +80,8 @@ const main = async (): Promise<void> => {
                     type: row.type ?? 'entry',
                     size: row.size ?? bonds.length,
                     sourceBond,
-                    computedAt: now,
+                    computedAt: row.computedAt,
+                    computeRevision: revision,
                 });
             }
         }
@@ -87,28 +90,10 @@ const main = async (): Promise<void> => {
         // this deal with a higher score, do not downgrade it.
         const ops: any[] = [];
         for (const doc of docs.values()) {
-            const mejor = { $gt: [doc.score, { $ifNull: ['$score', -1] }] };
             ops.push({
                 updateOne: {
                     filter: { bond: doc.bond, matchKey: doc.matchKey },
-                    update: [
-                        {
-                            $set: {
-                                bonds: doc.bonds,
-                                users: doc.users,
-                                type: doc.type,
-                                size: doc.size,
-                                sourceBond: doc.sourceBond,
-                                computedAt: doc.computedAt,
-                                score: {
-                                    $cond: [mejor, doc.score, '$score'],
-                                },
-                                parts: {
-                                    $cond: [mejor, doc.parts, '$parts'],
-                                },
-                            },
-                        },
-                    ],
+                    update: feedUpsertUpdate(doc),
                     upsert: true,
                 },
             });

@@ -2,8 +2,8 @@
 /* Periodic matching sweep: finds cycles that no single bond write triggers by
  * enqueueing recompute for active bonds whose agenda expired, in bounded batches. */
 import cron from 'node-cron';
-import { expresionCron } from '../../utilities/expresionCron';
-import config from '../../config';
+import { getMatchingSettings } from '../settings/matchingSettings.service';
+import type { MatchingSettingsSnapshot } from '../settings/matchingSettings.interface';
 import { errorLogger, logger } from '../../shared/logger';
 import { ENUM_BOND_REQUEST_STATUS } from './bondRequest.enum';
 import BondRequest from './bondRequest.model';
@@ -11,40 +11,32 @@ import { contarPendientes, enqueueRecompute } from './matching.robot';
 import { agendaVencida } from './matching.schedule';
 import { reconciliarVinculosVivos } from '../normalUser/vinculosVivos';
 
-const SWEEP_ENABLED =
-    (process.env.MATCH_SWEEP_ENABLED ?? (config.redis_url ? 'true' : 'false'))
-        .toLowerCase() === 'true';
-const SWEEP_CRON = expresionCron('MATCH_SWEEP_CRON', '*/5 * * * *');
+// Only an explicit operational backlog override remains environment-owned.
+// Otherwise derive it from the SAME snapshot as the batch, on every run.
+const SWEEP_MAX_BACKLOG = Number(process.env.MATCH_SWEEP_MAX_BACKLOG) || undefined;
 
-// 1500 per sweep x 12 sweeps/hour = 18k enqueues/h. Real end-to-end capacity is
-// the MIN of that and compute capacity (`MATCHER_CONCURRENCY` x
-// `MATCH_WORKER_CONCURRENCY`), so 18k only holds with a scaled worker.
-//
-// Hard cap of 20k bounds a bad env: enqueueing 100k jobs at once kills Redis.
-const SWEEP_BATCH = Math.min(
-    Math.max(Number(process.env.MATCH_SWEEP_BATCH) || 1500, 1),
-    20000
-);
-
-// Backpressure: past this threshold the sweep enqueues nothing and waits for the
-// next round; links are not lost, their agenda already expired and they stay
-// eligible. Jobs always carry explicit priority, so this bounds Redis memory and
-// Atlas pressure, not user-facing latency.
-const SWEEP_MAX_BACKLOG = Math.max(
-    Number(process.env.MATCH_SWEEP_MAX_BACKLOG) || SWEEP_BATCH * 3,
-    1
-);
+const sweepLimits = (settings: Readonly<MatchingSettingsSnapshot>) => {
+    // Retain the hard 20k cap: enqueueing 100k jobs at once kills Redis.
+    const batch = Math.min(Math.max(settings.sweepBatch, 1), 20000);
+    return { batch, maxBacklog: Math.max(SWEEP_MAX_BACKLOG ?? batch * 3, 1) };
+};
 
 /** Enqueues recompute for one batch of active bonds with an expired agenda.
- *  Returns how many were enqueued (0 when stopped by backpressure). */
-export const runSweepOnce = async (): Promise<number> => {
+ *  Returns 0 when disabled or stopped by backpressure. A started batch keeps its
+ *  snapshot and may finish after the scheduler is disabled. */
+export const runSweepOnce = async (
+    snapshot?: Readonly<MatchingSettingsSnapshot>
+): Promise<number> => {
+    const settings = snapshot ?? await getMatchingSettings();
+    if (!settings.sweepEnabled) return 0;
+    const { batch: sweepBatch, maxBacklog } = sweepLimits(settings);
     // Backpressure before querying Mongo: with the queue full the query is wasted.
     // `null` = unknown (no Redis, or Redis hiccup); continue on purpose, since the
     // inline mode is already bounded by `inlineRunning`.
     const pendientes = await contarPendientes();
-    if (pendientes !== null && pendientes >= SWEEP_MAX_BACKLOG) {
+    if (pendientes !== null && pendientes >= maxBacklog) {
         logger.warn(
-            `[matching] sweep en pausa: ${pendientes} pendientes >= ${SWEEP_MAX_BACKLOG}. ` +
+            `[matching] sweep en pausa: ${pendientes} pendientes >= ${maxBacklog}. ` +
                 'El worker viene atrasado; se espera la próxima vuelta.'
         );
         return 0;
@@ -53,8 +45,8 @@ export const runSweepOnce = async (): Promise<number> => {
     // Never enqueue past the threshold: with 300 slots left, enqueue 300, not 1500.
     const cupo =
         pendientes === null
-            ? SWEEP_BATCH
-            : Math.min(SWEEP_BATCH, SWEEP_MAX_BACKLOG - pendientes);
+            ? sweepBatch
+            : Math.min(sweepBatch, maxBacklog - pendientes);
     if (cupo <= 0) return 0;
 
     const ahora = new Date();
@@ -111,57 +103,134 @@ export const runSweepOnce = async (): Promise<number> => {
     return batch.length;
 };
 
-let scheduled = false;
+let scheduledTask: cron.ScheduledTask | undefined;
+let currentSettings: Readonly<MatchingSettingsSnapshot> | undefined;
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
+let refreshInFlight: Promise<void> | undefined;
+let starting: Promise<void> | undefined;
+let started = false;
+let generation = 0;
 // Anti-overlap: node-cron does not wait for a run to finish. With batch 1500 the
 // query plus enqueue is no longer instant, and two overlapping runs would pay for
 // the same query twice (`jobId` dedup would absorb the jobs, not the cost).
 let running = false;
 
-/** Registers the sweep cron (idempotent). Call once at startup. */
-export const startMatchingSweep = (): void => {
-    if (!SWEEP_ENABLED) {
-        logger.info(
-            '[matching] sweep deshabilitado (sin REDIS_URL y sin MATCH_SWEEP_ENABLED=true).'
+const runScheduledSweep = async (task: cron.ScheduledTask): Promise<void> => {
+    const isCurrent = () => started && scheduledTask === task && currentSettings?.sweepEnabled;
+    if (!isCurrent()) return;
+    const snapshot = currentSettings!;
+    // Safety net for `hasActiveBonds` (Person order): repairs anything the
+    // write-time recompute missed. Runs BEFORE the anti-overlap guard and apart
+    // from the sweep, because with Redis down `contarPendientes` waits forever
+    // (`maxRetriesPerRequest: null`) and would leave `running` stuck at true.
+    // Logs only when it corrects something: a single fix can be a race with a
+    // concurrent write (the next round settles it), fixes every round are a bug.
+    try {
+        const r = await reconciliarVinculosVivos();
+        if (r.encendidos || r.apagados) {
+            logger.warn(
+                `[vinculosVivos] reconciliación corrigió ${r.encendidos} encendidos y ${r.apagados} apagados`
+            );
+        }
+    } catch (e) {
+        errorLogger.error(
+            '[vinculosVivos] reconciliación falló:',
+            (e as Error)?.message
         );
-        return;
     }
-    if (scheduled) return;
-    scheduled = true;
-    cron.schedule(SWEEP_CRON, async () => {
-        // Safety net for `hasActiveBonds` (Person order): repairs anything the
-        // write-time recompute missed. Runs BEFORE the anti-overlap guard and apart
-        // from the sweep, because with Redis down `contarPendientes` waits forever
-        // (`maxRetriesPerRequest: null`) and would leave `running` stuck at true.
-        // Logs only when it corrects something: a single fix can be a race with a
-        // concurrent write (the next round settles it), fixes every round are a bug.
+    // Recheck after reconciliation: disable/shutdown may have retired this task.
+    if (!isCurrent() || running) return;
+    running = true;
+    try {
+        const n = await runSweepOnce(snapshot);
+        if (n) logger.info(`[matching] sweep encoló ${n} recomputos.`);
+    } catch (e) {
+        errorLogger.error('[matching] sweep falló:', (e as Error)?.message);
+    } finally {
+        running = false;
+    }
+};
+
+const applySweepSettings = (settings: Readonly<MatchingSettingsSnapshot>): void => {
+    if (settings.sweepEnabled && (!scheduledTask || currentSettings?.sweepCron !== settings.sweepCron)) {
+        const previous = scheduledTask;
+        previous?.stop();
+        let next: cron.ScheduledTask | undefined;
         try {
-            const r = await reconciliarVinculosVivos();
-            if (r.encendidos || r.apagados) {
-                logger.warn(
-                    `[vinculosVivos] reconciliación corrigió ${r.encendidos} encendidos y ${r.apagados} apagados`
-                );
+            // Installed node-cron v3 has stop/start, not destroy. A stable name
+            // replaces its registry entry instead of retaining every retired task.
+            const task = cron.schedule(settings.sweepCron, () => runScheduledSweep(task), {
+                name: 'matching-sweep', scheduled: false,
+            });
+            next = task;
+            task.start();
+            scheduledTask = task;
+        } catch (error) {
+            next?.stop();
+            previous?.start();
+            throw error; // Keep the last applied snapshot and retry next poll.
+        }
+    } else if (!settings.sweepEnabled) {
+        scheduledTask?.stop();
+        scheduledTask = undefined;
+    }
+    if (!currentSettings || currentSettings.sweepEnabled !== settings.sweepEnabled ||
+        currentSettings.sweepCron !== settings.sweepCron || currentSettings.sweepBatch !== settings.sweepBatch) {
+        const { batch, maxBacklog } = sweepLimits(settings);
+        logger.info(settings.sweepEnabled
+            ? `[matching] sweep activo (${settings.sweepCron}, lote ${batch}, techo de cola ${maxBacklog}).`
+            : '[matching] sweep deshabilitado por settings; sincronización sigue activa.');
+    }
+    currentSettings = settings;
+};
+
+const refreshSweepSettings = (): Promise<void> => {
+    if (refreshInFlight) return refreshInFlight;
+    const version = generation;
+    refreshInFlight = (async () => {
+        const settings = await getMatchingSettings(true);
+        // A read that finishes after stop (or a later start) cannot rearm cron.
+        if (!started || version !== generation) return;
+        applySweepSettings(settings);
+    })().finally(() => { refreshInFlight = undefined; });
+    return refreshInFlight;
+};
+
+/** Leader only. Idempotent startup; settings refresh runs even while disabled. */
+export const startMatchingSweep = (): Promise<void> => {
+    if (started) return starting ?? Promise.resolve();
+    started = true;
+    const version = ++generation;
+    starting = (async () => {
+        // A stopped session's read may still be settling. Do not overlap it.
+        if (refreshInFlight) await refreshInFlight.catch(() => undefined);
+        if (!started || version !== generation) return;
+        await refreshSweepSettings(); // No snapshot at startup must fail visibly.
+        if (!started || version !== generation) return;
+        refreshTimer = setInterval(async () => {
+            // Skip, rather than stack waiting timer callbacks on a slow read.
+            if (!started || version !== generation || refreshInFlight) return;
+            try {
+                await refreshSweepSettings();
+            } catch (error) {
+                errorLogger.error('[matching] sweep settings refresh falló; se conserva la configuración anterior:', error);
             }
-        } catch (e) {
-            errorLogger.error(
-                '[vinculosVivos] reconciliación falló:',
-                (e as Error)?.message
-            );
-        }
-        if (running) return; // previous run still going: do not overlap
-        running = true;
-        try {
-            const n = await runSweepOnce();
-            if (n) logger.info(`[matching] sweep encoló ${n} recomputos.`);
-        } catch (e) {
-            errorLogger.error(
-                '[matching] sweep falló:',
-                (e as Error)?.message
-            );
-        } finally {
-            running = false;
-        }
+        }, 5000);
+    })().catch((error: unknown) => {
+        if (version === generation) stopMatchingSweep();
+        throw error;
     });
-    logger.info(
-        `[matching] sweep activo (${SWEEP_CRON}, lote ${SWEEP_BATCH}, techo de cola ${SWEEP_MAX_BACKLOG}).`
-    );
+    return starting;
+};
+
+/** Stops producers, not an already-running batch. Safe during an in-flight read. */
+export const stopMatchingSweep = (): void => {
+    started = false;
+    generation++;
+    if (refreshTimer !== undefined) clearInterval(refreshTimer);
+    refreshTimer = undefined;
+    scheduledTask?.stop();
+    scheduledTask = undefined;
+    currentSettings = undefined;
+    starting = undefined;
 };
