@@ -91,6 +91,24 @@ services:
     depends_on:
       - backend
 
+  # ── Admin Dashboard (Next.js) ──
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: ${PUBLIC_URL:-http://localhost}:3001
+        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_URL:-http://localhost}/api/v1
+        BACKEND_API_URL: http://backend:5000
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - BACKEND_API_URL=http://backend:5000
+      - NEXT_PUBLIC_API_BASE_URL=${PUBLIC_URL:-http://localhost}/api/v1
+    depends_on:
+      - backend
+
   # ── Nginx (reverse proxy) ──
   nginx:
     image: nginx:alpine
