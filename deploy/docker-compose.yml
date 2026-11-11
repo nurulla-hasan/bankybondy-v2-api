@@ -14,7 +14,7 @@ services:
 
   # ── MinIO (S3-compatible object storage) ──
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -33,7 +33,7 @@ services:
 
   # ── MinIO Init (create default bucket & public read policy) ──
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
