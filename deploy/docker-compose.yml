@@ -60,10 +60,10 @@ services:
   # ── Backend API (Express) ──
   backend:
     build:
-      context: ./bankybondy-api-v2
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: ./bankybondy-api-v2/.env
+    env_file: ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379
       - MATCH_CANDIDATE_MODE=knn
@@ -80,10 +80,10 @@ services:
   # ── Backend Worker (BullMQ matching) ──
   worker:
     build:
-      context: ./bankybondy-api-v2
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: ./bankybondy-api-v2/.env
+    env_file: ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379
       - MATCH_CANDIDATE_MODE=knn
@@ -101,7 +101,7 @@ services:
   # Set PUBLIC_URL in ./.env (e.g. http://72.61.115.32) before building.
   frontend:
     build:
-      context: ./bankybondy-v2
+      context: ./frontend
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_APP_URL: ${PUBLIC_URL:-http://localhost}
@@ -111,7 +111,7 @@ services:
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
         BACKEND_API_URL: http://backend:5000
     restart: unless-stopped
-    env_file: ./bankybondy-v2/.env.local
+    env_file: ./frontend/.env.local
     environment:
       - BACKEND_API_URL=http://backend:5000
       - NEXT_PUBLIC_APP_URL=${PUBLIC_URL:-http://localhost}
