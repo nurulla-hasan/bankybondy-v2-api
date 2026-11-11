@@ -14,10 +14,20 @@ const ACCESS_COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 
 const isProd = config.NODE_ENV === 'production';
 
+const isSecureCookie = (): boolean => {
+    if (process.env.COOKIE_SECURE === 'false') return false;
+    if (process.env.COOKIE_SECURE === 'true') return true;
+    if (isProd) {
+        const publicUrl = process.env.PUBLIC_URL || '';
+        return !publicUrl.startsWith('http://');
+    }
+    return false;
+};
+
 export const setAccessCookie = (res: Response, token: string): void => {
     res.cookie(ACCESS_COOKIE_NAME, token, {
         httpOnly: true,
-        secure: isProd,
+        secure: isSecureCookie(),
         sameSite: 'lax',
         path: '/',
         maxAge: ACCESS_COOKIE_MAX_AGE_MS,
@@ -27,7 +37,7 @@ export const setAccessCookie = (res: Response, token: string): void => {
 export const setRefreshCookie = (res: Response, token: string): void => {
     res.cookie(REFRESH_COOKIE_NAME, token, {
         httpOnly: true,
-        secure: isProd,
+        secure: isSecureCookie(),
         sameSite: 'lax',
         path: '/',
         maxAge: REFRESH_COOKIE_MAX_AGE_MS,
@@ -49,7 +59,7 @@ export const setAuthCookies = (
 export const clearAccessCookie = (res: Response): void => {
     res.clearCookie(ACCESS_COOKIE_NAME, {
         httpOnly: true,
-        secure: isProd,
+        secure: isSecureCookie(),
         sameSite: 'lax',
         path: '/',
     });
@@ -58,7 +68,7 @@ export const clearAccessCookie = (res: Response): void => {
 export const clearRefreshCookie = (res: Response): void => {
     res.clearCookie(REFRESH_COOKIE_NAME, {
         httpOnly: true,
-        secure: isProd,
+        secure: isSecureCookie(),
         sameSite: 'lax',
         path: '/',
     });
