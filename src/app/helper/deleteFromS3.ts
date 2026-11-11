@@ -14,6 +14,9 @@ const s3 = new S3Client({
         accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
     },
+    ...(process.env.AWS_S3_ENDPOINT
+        ? { endpoint: process.env.AWS_S3_ENDPOINT, forcePathStyle: true }
+        : {}),
 });
 
 export const deleteFileFromS3 = async (fileName: string) => {
@@ -26,15 +29,15 @@ export const deleteFileFromS3 = async (fileName: string) => {
         return;
     }
     let url: URL;
-    let cdnHost: string;
+    let cdnUrl: URL;
     try {
         url = new URL(fileName);
-        cdnHost = new URL(process.env.CLOUDFRONT_URL as string).host;
+        cdnUrl = new URL(process.env.CLOUDFRONT_URL as string);
     } catch {
         console.error('deleteFileFromS3: URL/CDN inválida, se ignora:', fileName);
         return;
     }
-    if (url.host !== cdnHost) {
+    if (url.host !== cdnUrl.host) {
         console.error('deleteFileFromS3: host no-CDN, se ignora:', fileName);
         return;
     }
@@ -50,6 +53,14 @@ export const deleteFileFromS3 = async (fileName: string) => {
         return;
     }
     const bucket = process.env.AWS_S3_BUCKET_NAME!;
+
+    // Strip bucket or CDN prefix if present (e.g. MinIO path-style /banky-bondy/uploads/... or CLOUDFRONT_URL with path)
+    const cdnPrefix = cdnUrl.pathname.replace(/^\/+|\/+$/g, '');
+    if (cdnPrefix && decodedFileName.startsWith(cdnPrefix + '/')) {
+        decodedFileName = decodedFileName.slice(cdnPrefix.length + 1);
+    } else if (bucket && decodedFileName.startsWith(bucket + '/')) {
+        decodedFileName = decodedFileName.slice(bucket.length + 1);
+    }
 
     try {
         const headCommand = new HeadObjectCommand({
