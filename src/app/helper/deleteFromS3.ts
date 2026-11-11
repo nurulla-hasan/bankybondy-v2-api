@@ -4,6 +4,8 @@ import {
     HeadObjectCommand,
     DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import fs from 'fs';
+import path from 'path';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -60,6 +62,20 @@ export const deleteFileFromS3 = async (fileName: string) => {
         decodedFileName = decodedFileName.slice(cdnPrefix.length + 1);
     } else if (bucket && decodedFileName.startsWith(bucket + '/')) {
         decodedFileName = decodedFileName.slice(bucket.length + 1);
+    }
+
+    const isLocal = process.env.STORAGE_DRIVER === 'local' || !process.env.AWS_ACCESS_KEY_ID;
+    if (isLocal) {
+        const localPath = path.join(process.cwd(), decodedFileName);
+        try {
+            await fs.promises.unlink(localPath);
+            console.log(`Successfully deleted local file ${decodedFileName}`);
+        } catch (err: any) {
+            if (err.code !== 'ENOENT') {
+                console.error(`Error deleting local file ${decodedFileName}:`, err);
+            }
+        }
+        return;
     }
 
     try {

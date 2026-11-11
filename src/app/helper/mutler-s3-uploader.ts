@@ -4,9 +4,11 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { Request } from 'express';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
+import fs from 'fs';
+import path from 'path';
 import AppError from '../error/appError';
 
-/** Shared S3 client for all uploads. */
+/** Shared S3 client for S3 uploads (when configured). */
 const s3 = new S3Client({
     region: process.env.AWS_REGION || 'us-east-1',
     credentials: {
@@ -48,7 +50,49 @@ const ALLOWED_MIMETYPES = new Set([
     'application/pdf',
 ]);
 
-/** Multer middleware storing uploads on S3. */
+const getUploadPath = (fieldname?: string): string => {
+    if (fieldname === 'profile_image') return 'uploads/images/profile';
+    if (fieldname === 'category_image') return 'uploads/images/category';
+    if (fieldname === 'video') return 'uploads/videos';
+    if (fieldname === 'topic_icon') return 'uploads/images/topic_icon';
+    if (fieldname === 'chat_images') return 'uploads/images/chat_image';
+    if (fieldname === 'chat_videos') return 'uploads/videos/chat_videos';
+    if (fieldname === 'banner') return 'uploads/images/banner_image';
+    if (fieldname === 'team_bg_image') return 'uploads/images/team_bg_image';
+    if (fieldname === 'playlist_cover') return 'uploads/images/playlist_cover';
+    if (fieldname === 'audio_cover') return 'uploads/images/audio_cover';
+    if (fieldname === 'audio') return 'uploads/audios';
+    if (fieldname === 'thumbnail') return 'uploads/images/thumbnail';
+    if (fieldname === 'topic_image') return 'uploads/images/audio_topic';
+    if (fieldname === 'profile_cover') return 'uploads/images/profile_cover';
+    if (fieldname === 'group_chat_image') return 'uploads/images/group_chat_image';
+    if (fieldname === 'conversation_pdf') return 'uploads/pdf/conversation_pdf';
+    if (fieldname === 'conversation_image') return 'uploads/images/conversation_image';
+    if (fieldname === 'conversation_video') return 'uploads/videos/conversation_video';
+    return 'uploads';
+};
+
+const OWNER_NAMESPACED_FIELDS = [
+    'conversation_image',
+    'conversation_pdf',
+    'conversation_video',
+    'audio',
+    'audio_cover',
+];
+
+const computeFullPath = (fieldname: string | undefined, originalname: string, ownerId?: string): { dir: string; fullPath: string; fileName: string } => {
+    const uploadPath = getUploadPath(fieldname);
+    const sanitizedOriginalName = originalname
+        .replace(/\s+/g, '_')
+        .replace(/[^\w.-]+/g, '');
+    const fileName = Date.now() + '-' + sanitizedOriginalName;
+    const dir = fieldname && OWNER_NAMESPACED_FIELDS.includes(fieldname) && ownerId
+        ? `${uploadPath}/${ownerId}`
+        : uploadPath;
+    return { dir, fullPath: `${dir}/${fileName}`, fileName };
+};
+
+/** Multer middleware storing uploads on local disk or S3 depending on STORAGE_DRIVER. */
 export const uploadFile = () => {
     const fileFilter = (req: Request, file: any, cb: any) => {
         const allowedFieldnames = [
@@ -78,11 +122,8 @@ export const uploadFile = () => {
         ];
 
         if (file.fieldname === undefined) {
-            // Allow requests without any files
             cb(null, true);
         } else if (allowedFieldnames.includes(file.fieldname)) {
-            // Browsers append params to the media type (e.g. MediaRecorder:
-            // 'audio/webm;codecs=opus'); compare only the base type.
             const mimetype = (file.mimetype || '')
                 .split(';')[0]
                 .trim()
@@ -90,7 +131,6 @@ export const uploadFile = () => {
             if (ALLOWED_MIMETYPES.has(mimetype)) {
                 cb(null, true);
             } else {
-                // Client-chosen file → 400, not a server 500.
                 cb(new AppError(400, 'Invalid file type'));
             }
         } else {
@@ -98,79 +138,34 @@ export const uploadFile = () => {
         }
     };
 
-    const storage = multerS3({
-        s3: s3,
-        bucket: process.env.AWS_S3_BUCKET_NAME || 'your-bucket-name',
-        contentType: multerS3.AUTO_CONTENT_TYPE,
-        // No ACL: the bucket does not support them.
-        key: function (req, file, cb) {
-            let uploadPath = '';
+    const isLocal = process.env.STORAGE_DRIVER === 'local' || !process.env.AWS_ACCESS_KEY_ID;
 
-            if (file.fieldname === 'profile_image') {
-                uploadPath = 'uploads/images/profile';
-            } else if (file.fieldname === 'category_image') {
-                uploadPath = 'uploads/images/category';
-            } else if (file.fieldname === 'video') {
-                uploadPath = 'uploads/videos';
-            } else if (file.fieldname === 'topic_icon') {
-                uploadPath = 'uploads/images/topic_icon';
-            } else if (file.fieldname === 'chat_images') {
-                uploadPath = 'uploads/images/chat_image';
-            } else if (file.fieldname === 'chat_videos') {
-                uploadPath = 'uploads/videos/chat_videos';
-            } else if (file.fieldname === 'banner') {
-                uploadPath = 'uploads/images/banner_image';
-            } else if (file.fieldname === 'team_bg_image') {
-                uploadPath = 'uploads/images/team_bg_image';
-            } else if (file.fieldname === 'playlist_cover') {
-                uploadPath = 'uploads/images/playlist_cover';
-            } else if (file.fieldname === 'audio_cover') {
-                uploadPath = 'uploads/images/audio_cover';
-            } else if (file.fieldname === 'audio') {
-                uploadPath = 'uploads/audios';
-            } else if (file.fieldname === 'thumbnail') {
-                uploadPath = 'uploads/images/thumbnail';
-            } else if (file.fieldname === 'topic_image') {
-                uploadPath = 'uploads/images/audio_topic';
-            } else if (file.fieldname === 'profile_cover') {
-                uploadPath = 'uploads/images/profile_cover';
-            } else if (file.fieldname === 'group_chat_image') {
-                uploadPath = 'uploads/images/group_chat_image';
-            } else if (file.fieldname === 'conversation_pdf') {
-                uploadPath = 'uploads/pdf/conversation_pdf';
-            } else if (file.fieldname === 'conversation_image') {
-                uploadPath = 'uploads/images/conversation_image';
-            } else if (file.fieldname === 'conversation_video') {
-                uploadPath = 'uploads/videos/conversation_video';
-            } else {
-                uploadPath = 'uploads';
-            }
-
-            const sanitizedOriginalName = file.originalname
-                .replace(/\s+/g, '_')
-                .replace(/[^\w.-]+/g, '');
-
-            const name = Date.now() + '-' + sanitizedOriginalName;
-
-            // IDOR guard: chat attachments and audio files are namespaced by
-            // owner so delete/publish endpoints can verify the URL belongs to
-            // the caller.
-            const OWNER_NAMESPACED_FIELDS = [
-                'conversation_image',
-                'conversation_pdf',
-                'conversation_video',
-                'audio',
-                'audio_cover',
-            ];
-            const ownerId = (req as any)?.user?.profileId;
-            const fullPath =
-                OWNER_NAMESPACED_FIELDS.includes(file.fieldname) && ownerId
-                    ? `${uploadPath}/${ownerId}/${name}`
-                    : `${uploadPath}/${name}`;
-
-            cb(null, fullPath);
-        },
-    });
+    const storage = isLocal
+        ? multer.diskStorage({
+              destination: function (req, file, cb) {
+                  const ownerId = (req as any)?.user?.profileId;
+                  const { dir } = computeFullPath(file.fieldname, file.originalname, ownerId);
+                  const targetDir = path.join(process.cwd(), dir);
+                  fs.mkdirSync(targetDir, { recursive: true });
+                  cb(null, targetDir);
+              },
+              filename: function (req, file, cb) {
+                  const ownerId = (req as any)?.user?.profileId;
+                  const { fullPath, fileName } = computeFullPath(file.fieldname, file.originalname, ownerId);
+                  (file as any).key = fullPath;
+                  cb(null, fileName);
+              },
+          })
+        : multerS3({
+              s3: s3,
+              bucket: process.env.AWS_S3_BUCKET_NAME || 'your-bucket-name',
+              contentType: multerS3.AUTO_CONTENT_TYPE,
+              key: function (req, file, cb) {
+                  const ownerId = (req as any)?.user?.profileId;
+                  const { fullPath } = computeFullPath(file.fieldname, file.originalname, ownerId);
+                  cb(null, fullPath);
+              },
+          });
 
     const upload = multer({
         storage: storage,
