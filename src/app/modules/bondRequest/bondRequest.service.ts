@@ -832,7 +832,7 @@ export const getMatchingBondRequest = async (
     };
     const legacy = MATCHING.legacyRanking;
     const rankScore = (m: (typeof matches)[number]) =>
-        m.score - (legacy ? 0 : MATCHING.pairBias * (m.ids.length - 2));
+        m.score - (legacy ? 0 : settings.pairBias * (m.ids.length - 2));
 
     matches.sort((a, b) => {
         if (legacy) {
@@ -856,12 +856,12 @@ export const getMatchingBondRequest = async (
 
     // Serve cap: matching is a bounded RANKING, not a catalog. Serving by `bonds`
     // merges chains from many sourceBonds (hundreds of them), so keep only the best
-    // `maxResults` (100) above `minServeScore` (0.4) on the final score. `matches` is
-    // already ranked desc, so filter+cut preserves order and `total` is the capped
-    // set (never more than ceil(100/limit) pages).
+    // `maxResults` above `minServeScore` on the final score (both dashboard dials).
+    // `matches` is already ranked desc, so filter+cut preserves order and `total` is
+    // the capped set (never more than ceil(maxResults/limit) pages).
     const served = matches
-        .filter((m) => m.score >= MATCHING.minServeScore)
-        .slice(0, MATCHING.maxResults);
+        .filter((m) => m.score >= settings.minServeScore)
+        .slice(0, settings.maxResults);
 
     const startIndex = (page - 1) * limit;
     const pageMatches = served.slice(startIndex, startIndex + limit);

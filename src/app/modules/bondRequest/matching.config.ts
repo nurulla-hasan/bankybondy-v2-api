@@ -157,11 +157,12 @@ export const MATCHING = {
     surpriseFloor: num(process.env.MATCH_SURPRISE_FLOOR, 0.45, { min: 0, max: 1 }),
     surpriseMargin: num(process.env.MATCH_SURPRISE_MARGIN, 0.1, { min: 0, max: 1 }),
 
-    // 'empty' wildcard bands: empty↔empty = emptyEncounter (0.9, the date-app perfect
-    // encounter); empty↔surprise = emptyMixed (0.55); empty↔concrete = 0 (excluded; the edge
-    // stays 0 and `passesGate` drops it). Invariant: minScore (0.4) < emptyMixed < emptyEncounter.
-    emptyEncounter: num(process.env.MATCH_EMPTY_ENCOUNTER, 0.9, { min: 0, max: 1 }),
-    emptyMixed: num(process.env.MATCH_EMPTY_MIXED, 0.55, { min: 0, max: 1 }),
+    // 'empty' wildcard bands: empty↔empty = emptyEncounter (0.45, just above the gate so the
+    // encounter still appears but never outranks a real specific entry);
+    // empty↔surprise = emptyMixed (0.42); empty↔concrete = 0 (excluded; the edge stays 0 and
+    // `passesGate` drops it). Invariant: minScore (0.4) < emptyMixed < emptyEncounter.
+    emptyEncounter: num(process.env.MATCH_EMPTY_ENCOUNTER, 0.45, { min: 0, max: 1 }),
+    emptyMixed: num(process.env.MATCH_EMPTY_MIXED, 0.42, { min: 0, max: 1 }),
 
     // Wildcard bonds have signal-less vectors, so vector search never returns them mid-chain.
     // They are always added via a bounded direct query; purely additive (never removes or

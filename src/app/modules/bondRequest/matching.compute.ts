@@ -83,12 +83,19 @@ const normalizeText = (s?: string) =>
 /** Chain quality from its edges: same yardstick as pairs (`semanticQuality`),
  *  `wMin·worst + (1-wMin)·mean`, so a cycle is not crushed by its weakest link. Values are
  *  already in [0,1], so is the blend. */
-const blendEdges = (edges: number[]): number => {
+const blendEdges = (edges: number[], wMin: number): number => {
     if (!edges.length) return 0;
     const min = Math.min(...edges);
     const mean = edges.reduce((a, b) => a + b, 0) / edges.length;
-    return MATCHING.wMin * min + (1 - MATCHING.wMin) * mean;
+    return wMin * min + (1 - wMin) * mean;
 };
+
+const finalWeightsOf = (settings: Readonly<MatchingSettingsSnapshot>) => ({
+    sem: settings.weightSem,
+    rep: settings.weightRep,
+    prox: settings.weightProx,
+    fresh: settings.weightFresh,
+});
 
 /**
  * Directional edge (A's want met by B's offer) over pre-normalized vectors: dot == cosine.
@@ -109,7 +116,14 @@ const directionalScoreF32 = (
     // resolved by band only: empty↔empty = encounter (high), empty↔surprise = mixed (weak),
     // empty↔concrete = 0 (excluded).
     if (wantEmpty || offerEmpty) {
-        return emptyEdgeScore(wantEmpty, wantSurprise, offerEmpty, offerSurprise);
+        return emptyEdgeScore(
+            wantEmpty,
+            wantSurprise,
+            offerEmpty,
+            offerSurprise,
+            settings.emptyEncounter,
+            settings.emptyMixed
+        );
     }
     // Without empty, the offer needs a real vector. 'surprise' does have one.
     if (!offerF32 || offerF32.length === 0) return 0;
@@ -256,7 +270,7 @@ export const computeMatchesForBond = async (
             settings
         );
 
-        if (!passesGate(s1, s2)) continue;
+        if (!passesGate(s1, s2, settings.minScore)) continue;
 
         const candId = candidate._id.toString();
         const candUser = (candidate.user?._id || candidate.user)?.toString();
@@ -265,7 +279,7 @@ export const computeMatchesForBond = async (
         globalSeen.add(key);
 
         const parts: IMatchScoreParts = {
-            sem: semanticQuality(s1, s2),
+            sem: semanticQuality(s1, s2, settings.wMin),
             rep: repOf(candUser),
             prox: proxOfNode(candidate),
             fresh: freshOfNode(candidate),
@@ -273,12 +287,15 @@ export const computeMatchesForBond = async (
         // Modality as soft preference: differing formats lower the score (never exclude);
         // missing modality is tolerated (factor 1).
         const score =
-            finalMatchScore({
-                semQuality: parts.sem,
-                reputation: parts.rep,
-                proximity: parts.prox,
-                freshness: parts.fresh,
-            }) * modalityFactor(startModality, candidate.modality);
+            finalMatchScore(
+                {
+                    semQuality: parts.sem,
+                    reputation: parts.rep,
+                    proximity: parts.prox,
+                    freshness: parts.fresh,
+                },
+                finalWeightsOf(settings)
+            ) * modalityFactor(startModality, candidate.modality);
 
         records.push({
             ids: [bondRequestId, candId],
@@ -308,7 +325,7 @@ export const computeMatchesForBond = async (
                 toReq._offerF32,
                 settings
             );
-            if (score >= MATCHING.minScore) {
+            if (score >= settings.minScore) {
                 edges.get(id)!.push({ to: toId, score });
             }
         }
@@ -367,7 +384,7 @@ export const computeMatchesForBond = async (
                     const allEdges = [...edgeScores, closing.score];
                     const sem = MATCHING.legacyRanking
                         ? Math.min(...allEdges)
-                        : blendEdges(allEdges);
+                        : blendEdges(allEdges, settings.wMin);
 
                     // Cycle participants, excluding my own starting bond.
                     const participants = path.filter(
@@ -399,12 +416,15 @@ export const computeMatchesForBond = async (
                           )
                         : 1;
                     const finalScore =
-                        finalMatchScore({
-                            semQuality: parts.sem,
-                            reputation: parts.rep,
-                            proximity: parts.prox,
-                            freshness: parts.fresh,
-                        }) * modFactor;
+                        finalMatchScore(
+                            {
+                                semQuality: parts.sem,
+                                reputation: parts.rep,
+                                proximity: parts.prox,
+                                freshness: parts.fresh,
+                            },
+                            finalWeightsOf(settings)
+                        ) * modFactor;
 
                     records.push({
                         ids: [...path],
@@ -446,7 +466,7 @@ export const computeMatchesForBond = async (
 
     // Hard cap: keep only the N BEST by finalScore ("the 100 best"), never more per bond.
     deduped.sort((a, b) => b.score - a.score);
-    const top = deduped.slice(0, MATCHING.maxResults);
+    const top = deduped.slice(0, settings.maxResults);
 
     // Storage order (serving re-sorts anyway). NEW: pure score (top-N already chosen by
     // quality). LEGACY: pairs before cycles.

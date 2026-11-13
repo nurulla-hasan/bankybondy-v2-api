@@ -14,6 +14,9 @@ const source = ts.transpileModule(
 const snapshot = (patch = {}) => Object.freeze({
     candidateMode: 'vector', frontierEnabled: true, cacheTtlMinutes: 60,
     surpriseFloor: 0.45, surpriseMargin: 0.1, frontierSeeds: 5,
+    emptyEncounter: 0.45, emptyMixed: 0.42, minScore: 0.4, minServeScore: 0.4, wMin: 0.7,
+    weightSem: 0.5, weightRep: 0.25, weightProx: 0.15, weightFresh: 0.1,
+    pairBias: 0.02, maxResults: 100,
     sweepEnabled: true, sweepBatch: 1500, sweepCron: '*/5 * * * *',
     revision: 1, computeRevision: 1, updatedAt: '2026-01-01T00:00:00.000Z', updatedBy: null,
     ...patch,

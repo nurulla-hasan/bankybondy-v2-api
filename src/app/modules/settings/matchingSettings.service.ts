@@ -17,7 +17,24 @@ const snapshotSchema = matchingSettingsValuesSchema.extend({
 });
 const computeFields = new Set<keyof MatchingSettingsValues>([
     'candidateMode', 'frontierEnabled', 'frontierSeeds', 'surpriseFloor', 'surpriseMargin',
+    'emptyEncounter', 'emptyMixed', 'minScore', 'wMin',
+    'weightSem', 'weightRep', 'weightProx', 'weightFresh', 'maxResults',
 ]);
+// Rows seeded before these dials existed lack them; fall back to the deployed defaults so a
+// legacy row keeps working instead of failing snapshot validation.
+const legacyDefaults: Partial<MatchingSettingsValues> = {
+    minScore: MATCHING.minScore,
+    minServeScore: MATCHING.minServeScore,
+    wMin: MATCHING.wMin,
+    weightSem: MATCHING.weights.sem,
+    weightRep: MATCHING.weights.rep,
+    weightProx: MATCHING.weights.prox,
+    weightFresh: MATCHING.weights.fresh,
+    emptyEncounter: MATCHING.emptyEncounter,
+    emptyMixed: MATCHING.emptyMixed,
+    pairBias: MATCHING.pairBias,
+    maxResults: MATCHING.maxResults,
+};
 const CACHE_MS = 5000;
 let cached: Readonly<MatchingSettingsSnapshot> | undefined;
 let expiresAt = 0;
@@ -29,12 +46,32 @@ function assertServingTtl(cacheTtlMinutes: number | undefined): void {
     }
 }
 
+type TuningValues = Pick<MatchingSettingsValues,
+    'minScore' | 'emptyMixed' | 'emptyEncounter' |
+    'weightSem' | 'weightRep' | 'weightProx' | 'weightFresh'>;
+
+// Cross-field invariants the per-field schemas cannot express: the empty bands must sit in
+// order above the gate (otherwise chains that pass the gate score below the serving floor),
+// and the final-score weights must form a normalized blend.
+function assertTuning(values: TuningValues): void {
+    if (!(values.minScore < values.emptyMixed && values.emptyMixed < values.emptyEncounter)) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'minScore < emptyMixed < emptyEncounter is required');
+    }
+    const sum = values.weightSem + values.weightRep + values.weightProx + values.weightFresh;
+    if (Math.abs(sum - 1) > 0.001) {
+        throw new AppError(httpStatus.BAD_REQUEST, `final-score weights must sum to 1 (got ${sum})`);
+    }
+}
+
 function toSnapshot(row: MatchingSettingsRecord | null): MatchingSettingsSnapshot {
     if (!row) {
         throw new AppError(httpStatus.SERVICE_UNAVAILABLE, 'Matching settings are not initialized; start the API to seed them');
     }
     // An explicit allowlist keeps Mongo internals and unrelated fields out of the DTO.
-    const values = Object.fromEntries(Object.keys(matchingSettingsValuesSchema.shape).map((key) => [key, row[key]]));
+    const values = Object.fromEntries(Object.keys(matchingSettingsValuesSchema.shape).map((key) => [
+        key,
+        row[key as keyof MatchingSettingsRecord] ?? legacyDefaults[key as keyof MatchingSettingsValues],
+    ]));
     const snapshot = snapshotSchema.parse({
         ...values,
         revision: row.revision,
@@ -88,7 +125,25 @@ export async function getMatchingSettings(force = false): Promise<Readonly<Match
 /** API bootstrap only, after Mongo connects and before HTTP starts listening. */
 export async function initializeMatchingSettings(): Promise<MatchingSettingsSnapshot> {
     const existing = await MatchingSettings.findById(MATCHING_SETTINGS_ID).lean();
-    if (existing) return accept(toSnapshot(existing));
+    if (existing) {
+        // Rows created before the tuning dials existed are backfilled once, and the compute
+        // revision is bumped so cached results (scored with the old empty bands) recompute.
+        const missing = Object.keys(legacyDefaults).filter(
+            (key) => existing[key as keyof MatchingSettingsRecord] === undefined
+        );
+        if (missing.length && missing.includes('minScore')) {
+            const backfill = Object.fromEntries(
+                missing.map((key) => [key, legacyDefaults[key as keyof MatchingSettingsValues]])
+            );
+            const row = await MatchingSettings.findOneAndUpdate(
+                { _id: MATCHING_SETTINGS_ID, minScore: { $exists: false } },
+                { $set: { ...backfill, updatedAt: new Date() }, $inc: { computeRevision: 1 } },
+                { new: true, runValidators: true, timestamps: false }
+            ).lean();
+            if (row) return accept(toSnapshot(row));
+        }
+        return accept(toSnapshot(existing));
+    }
 
     // Only construct defaults when missing. Never import matching.sweep (side effects).
     const seed = matchingSettingsValuesSchema.parse({
@@ -98,10 +153,22 @@ export async function initializeMatchingSettings(): Promise<MatchingSettingsSnap
         cacheTtlMinutes: MATCHING.cacheTtlMinutes,
         surpriseFloor: MATCHING.surpriseFloor,
         surpriseMargin: MATCHING.surpriseMargin,
+        emptyEncounter: MATCHING.emptyEncounter,
+        emptyMixed: MATCHING.emptyMixed,
+        minScore: MATCHING.minScore,
+        minServeScore: MATCHING.minServeScore,
+        wMin: MATCHING.wMin,
+        weightSem: MATCHING.weights.sem,
+        weightRep: MATCHING.weights.rep,
+        weightProx: MATCHING.weights.prox,
+        weightFresh: MATCHING.weights.fresh,
+        pairBias: MATCHING.pairBias,
+        maxResults: MATCHING.maxResults,
         sweepEnabled: (process.env.MATCH_SWEEP_ENABLED ?? (config.redis_url ? 'true' : 'false')).toLowerCase() === 'true',
         sweepBatch: Math.min(Math.max(Number(process.env.MATCH_SWEEP_BATCH) || 1500, 1), 20000),
         sweepCron: expresionCron('MATCH_SWEEP_CRON', '*/5 * * * *'),
     });
+    assertTuning(seed as MatchingSettingsValues);
     assertServingTtl(seed.cacheTtlMinutes);
     const now = new Date();
     try {
@@ -129,6 +196,7 @@ export async function updateMatchingSettings(input: unknown, actorId: string): P
     if (current.revision !== expectedRevision) throw conflict();
 
     const changed = Object.entries(patch).filter(([key, value]) => value !== undefined && value !== current[key]);
+    if (changed.length) assertTuning({ ...current, ...Object.fromEntries(changed) } as TuningValues);
     const computeChanged = changed.some(([key]) => computeFields.has(key as keyof MatchingSettingsValues));
     if (changed.length && (current.revision === Number.MAX_SAFE_INTEGER || (computeChanged && current.computeRevision === Number.MAX_SAFE_INTEGER))) {
         throw new AppError(httpStatus.CONFLICT, 'Matching settings revision limit reached');

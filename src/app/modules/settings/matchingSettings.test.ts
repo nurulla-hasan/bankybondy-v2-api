@@ -40,6 +40,17 @@ const values = {
     cacheTtlMinutes: 60,
     surpriseFloor: 0.45,
     surpriseMargin: 0.1,
+    emptyEncounter: 0.45,
+    emptyMixed: 0.42,
+    minScore: 0.4,
+    minServeScore: 0.4,
+    wMin: 0.7,
+    weightSem: 0.5,
+    weightRep: 0.25,
+    weightProx: 0.15,
+    weightFresh: 0.1,
+    pairBias: 0.02,
+    maxResults: 100,
     frontierSeeds: 5,
     sweepEnabled: false,
     sweepBatch: 1500,
@@ -82,6 +93,10 @@ const cases: Case[] = [
             candidateMode: ['hybrid', 'KNN', 1], frontierEnabled: ['true', 1], sweepEnabled: ['false', null],
             cacheTtlMinutes: [-1, 43201, 1.5, '60', Infinity], frontierSeeds: [0, 21, 1.5],
             surpriseFloor: [-0.1, 1.1, NaN], surpriseMargin: [-0.1, 1.1], sweepBatch: [0, 20001, 1.5],
+            emptyEncounter: [-0.1, 1.1], emptyMixed: [-0.1, 1.1], minScore: [-0.1, 1.1],
+            minServeScore: [-0.1, 1.1], wMin: [-0.1, 1.1], weightSem: [-0.1, 1.1],
+            weightRep: [-0.1, 1.1], weightProx: [-0.1, 1.1], weightFresh: [-0.1, 1.1],
+            pairBias: [-0.1, 1.1], maxResults: [0, 501, 1.5],
             sweepCron: ['', 'not cron', '* * * * *; command', '*'.repeat(121)],
         };
         for (const [key, inputs] of Object.entries(invalid)) {
@@ -148,7 +163,7 @@ function harness(initial: Row | null = stored(), env: Record<string, string> = {
     const service = loadSource<typeof import('./matchingSettings.service')>('./matchingSettings.service.ts', {
         './matchingSettings.model': { MatchingSettings: model, MATCHING_SETTINGS_ID: 'matching' },
         '../../config': { redis_url: redis ? 'fake-redis-present' : undefined },
-        '../bondRequest/matching.config': { MATCHING: { ...values, serveTtlMinutes: 2880, ...matching } },
+        '../bondRequest/matching.config': { MATCHING: { ...values, weights: { sem: values.weightSem, rep: values.weightRep, prox: values.weightProx, fresh: values.weightFresh }, serveTtlMinutes: 2880, ...matching } },
         '../../utilities/expresionCron': cronHelper,
         '../../shared/logger': { errorLogger: log, logger: log },
     }, env, Clock);
@@ -239,6 +254,26 @@ cases.push(
         assert.equal(s.computeRevision, 1);
         const next = await h.service.updateMatchingSettings({ expectedRevision: 1, ...changes, sweepEnabled: true, cacheTtlMinutes: 120 }, 'actor');
         assert.equal(next.computeRevision, 1); assert.equal(next.revision, 2);
+    }],
+    ['cross-field invariants reject inverted empty bands and unnormalized weights', async () => {
+        const h = harness();
+        await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 0, emptyMixed: 0.5 }, 'actor'), { statusCode: 400 });
+        await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 0, weightSem: 0.4, weightRep: 0.25, weightProx: 0.15, weightFresh: 0.1 }, 'actor'), { statusCode: 400 });
+        assert.equal(h.state.writes.length, 0);
+        const s = await h.service.updateMatchingSettings({ expectedRevision: 0, emptyMixed: 0.43, weightSem: 0.55, weightFresh: 0.05 }, 'actor');
+        assert.equal(s.emptyMixed, 0.43); assert.equal(s.computeRevision, 1);
+    }],
+    ['legacy rows missing tuning dials fall back to deployed defaults', async () => {
+        const { emptyEncounter, emptyMixed, minScore, minServeScore, wMin, weightSem, weightRep, weightProx, weightFresh, pairBias, maxResults, ...legacy } = stored();
+        void emptyEncounter;
+        const h = harness(legacy);
+        const s = await h.service.getMatchingSettings();
+        assert.equal(s.emptyEncounter, values.emptyEncounter); assert.equal(s.emptyMixed, values.emptyMixed);
+        assert.equal(s.minScore, values.minScore); assert.equal(s.minServeScore, values.minServeScore);
+        assert.equal(s.wMin, values.wMin); assert.equal(s.weightSem, values.weightSem);
+        assert.equal(s.weightRep, values.weightRep); assert.equal(s.weightProx, values.weightProx);
+        assert.equal(s.weightFresh, values.weightFresh); assert.equal(s.pairBias, values.pairBias);
+        assert.equal(s.maxResults, values.maxResults);
     }],
     ['actual no-op preserves revisions, timestamp and actor; stale no-op conflicts', async () => {
         const h = harness(stored({ revision: 2, computeRevision: 1, updatedBy: 'original' }));

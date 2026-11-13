@@ -27,7 +27,11 @@ function load<T>(file: string, dependencies: Record<string, unknown>): T {
 const A = 'aaaaaaaaaaaaaaaaaaaaaaaa', B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 const U = '111111111111111111111111', V = '222222222222222222222222';
 const snapshot = Object.freeze({ candidateMode: 'knn' as const, frontierEnabled: false, frontierSeeds: 1,
-    surpriseFloor: 0.8, surpriseMargin: 0.1, cacheTtlMinutes: 60, sweepEnabled: false,
+    surpriseFloor: 0.8, surpriseMargin: 0.1, emptyEncounter: 0.45, emptyMixed: 0.42,
+    minScore: 0.4, minServeScore: 0.4, wMin: 0.7,
+    weightSem: 0.5, weightRep: 0.25, weightProx: 0.15, weightFresh: 0.1,
+    pairBias: 0.02, maxResults: 100,
+    cacheTtlMinutes: 60, sweepEnabled: false,
     sweepBatch: 10, sweepCron: '* * * * *', revision: 3, computeRevision: 2, updatedAt: new Date().toISOString(), updatedBy: null });
 const source = () => ({ _id: new mongoose.Types.ObjectId(A), user: U, offer: 'surprise', want: 'surprise',
     offerVector: [1], wantVector: [1], modality: 'online', matchesGen: 1, createdAt: new Date() });
