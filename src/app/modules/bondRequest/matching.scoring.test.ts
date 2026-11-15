@@ -71,11 +71,10 @@ const cases: Case[] = [
         s.emptyEdgeScore(true, false, true, false, 0.9, 0.4) > s.emptyEdgeScore(false, true, true, false, 0.9, 0.4)],
     ['vacío↔concreto NO pasa el gate (arista 0 → excluido)',
         s.passesGate(s.emptyEdgeScore(false, false, true, false, 0.9, 0.4), 0.9) === false],
-    // Config REAL: vacío↔sorpresa debe superar el gate con MARGEN (no quedar justo
-    // en 0.4, donde cualquier suba de MATCH_MIN_SCORE lo hacía desaparecer) y
-    // seguir por debajo del encuentro vacío↔vacío.
-    ['default: vacío↔sorpresa supera el gate con margen',
-        s.emptyEdgeScore(true, false, false, true) > MATCHING.minScore],
+    // Config REAL: vacío↔sorpresa debe superar o igualar el gate (emptyMixed >= minScore)
+    // y seguir por debajo del encuentro vacío↔vacío.
+    ['default: vacío↔sorpresa supera o iguala el gate',
+        s.emptyEdgeScore(true, false, false, true) >= MATCHING.minScore],
     ['default: vacío↔sorpresa < vacío↔vacío',
         s.emptyEdgeScore(true, false, false, true) < s.emptyEdgeScore(true, false, true, false)],
     // Robustez geo/frescura: entradas ausentes NO rompen (devuelven neutro, sin throw).

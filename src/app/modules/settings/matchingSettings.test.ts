@@ -35,13 +35,13 @@ function loadSource<T>(file: string, dependencies: Record<string, unknown>, env:
 import { matchingSettingsPatchSchema, matchingSettingsValuesSchema } from './matchingSettings.validation';
 
 const values = {
-    candidateMode: 'vector' as const,
+    candidateMode: 'knn' as const,
     frontierEnabled: true,
-    cacheTtlMinutes: 60,
-    surpriseFloor: 0.45,
-    surpriseMargin: 0.1,
-    emptyEncounter: 0.45,
-    emptyMixed: 0.42,
+    cacheTtlMinutes: 180,
+    surpriseFloor: 0.4,
+    surpriseMargin: 0.05,
+    emptyEncounter: 0.9,
+    emptyMixed: 0.4,
     minScore: 0.4,
     minServeScore: 0.4,
     wMin: 0.7,
@@ -53,15 +53,15 @@ const values = {
     maxResults: 100,
     frontierSeeds: 5,
     sweepEnabled: false,
-    sweepBatch: 1500,
-    sweepCron: '*/5 * * * *',
+    sweepBatch: 50,
+    sweepCron: '*/30 * * * *',
 };
 
 type Case = [string, () => void | Promise<void>];
 const cases: Case[] = [
     ['valid values and trimmed five/six-field cron syntax', () => {
         assert.deepEqual(matchingSettingsValuesSchema.parse(values), values);
-        assert.equal(matchingSettingsPatchSchema.parse({ expectedRevision: 0, sweepCron: '  */5 * * * *  ' }).sweepCron, values.sweepCron);
+        assert.equal(matchingSettingsPatchSchema.parse({ expectedRevision: 0, sweepCron: '  */30 * * * *  ' }).sweepCron, values.sweepCron);
         assert.equal(matchingSettingsPatchSchema.safeParse({ expectedRevision: 0, sweepCron: '0 */5 * * * *' }).success, true);
     }],
     ['cron input cannot trigger unbounded node-cron range expansion', () => {
@@ -193,7 +193,7 @@ cases.push(
         assert.equal(s.frontierEnabled, false); assert.equal(s.frontierSeeds, 12); assert.equal(s.cacheTtlMinutes, 90);
         assert.equal(h.state.logs.length, 1);
         const other = await harness(null, { MATCH_CANDIDATE_MODE: 'KNN', MATCH_SWEEP_ENABLED: 'FALSE', MATCH_SWEEP_BATCH: '-3' }, {}, true).service.initializeMatchingSettings();
-        assert.equal(other.candidateMode, 'vector'); assert.equal(other.sweepEnabled, false); assert.equal(other.sweepBatch, 1);
+        assert.equal(other.candidateMode, 'knn'); assert.equal(other.sweepEnabled, false); assert.equal(other.sweepBatch, 1);
     }],
     ['invalid effective seed is reported rather than silently replaced', async () => {
         const h = harness(null, { MATCH_SWEEP_BATCH: '1.5' });
@@ -243,7 +243,7 @@ cases.push(
         assert.equal((await h.service.updateMatchingSettings({ expectedRevision: 0, cacheTtlMinutes: 2880 }, 'actor')).cacheTtlMinutes, 2880);
     }],
     ['compute revision increments only for actual retrieval/scoring changes', async () => {
-        const changes = { candidateMode: 'knn', frontierEnabled: false, frontierSeeds: 6, surpriseFloor: 0.2, surpriseMargin: 0.3 };
+        const changes = { frontierEnabled: false, frontierSeeds: 6, surpriseFloor: 0.2, surpriseMargin: 0.3, minScore: 0.3 };
         for (const [key, value] of Object.entries(changes)) {
             const h = harness();
             const s = await h.service.updateMatchingSettings({ expectedRevision: 0, [key]: value }, 'actor');
@@ -257,7 +257,7 @@ cases.push(
     }],
     ['cross-field invariants reject inverted empty bands and unnormalized weights', async () => {
         const h = harness();
-        await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 0, emptyMixed: 0.5 }, 'actor'), { statusCode: 400 });
+        await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 0, emptyMixed: 0.95 }, 'actor'), { statusCode: 400 });
         await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 0, weightSem: 0.4, weightRep: 0.25, weightProx: 0.15, weightFresh: 0.1 }, 'actor'), { statusCode: 400 });
         assert.equal(h.state.writes.length, 0);
         const s = await h.service.updateMatchingSettings({ expectedRevision: 0, emptyMixed: 0.43, weightSem: 0.55, weightFresh: 0.05 }, 'actor');
@@ -278,8 +278,8 @@ cases.push(
     ['actual no-op preserves revisions, timestamp and actor; stale no-op conflicts', async () => {
         const h = harness(stored({ revision: 2, computeRevision: 1, updatedBy: 'original' }));
         const before = await h.service.getMatchingSettings();
-        assert.deepEqual(await h.service.updateMatchingSettings({ expectedRevision: 2, sweepCron: ` ${values.sweepCron} `, candidateMode: 'vector' }, 'new-actor'), before);
-        await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 1, candidateMode: 'vector' }, 'actor'), { statusCode: 409 });
+        assert.deepEqual(await h.service.updateMatchingSettings({ expectedRevision: 2, sweepCron: ` ${values.sweepCron} `, candidateMode: 'knn' }, 'new-actor'), before);
+        await assert.rejects(h.service.updateMatchingSettings({ expectedRevision: 1, candidateMode: 'knn' }, 'actor'), { statusCode: 409 });
     }],
     ['atomic compare-and-update rejects a concurrent edit for changed and no-op patches', async () => {
         for (const sweepBatch of [values.sweepBatch, 20]) {
@@ -391,7 +391,7 @@ cases.push(
         h.state.row!.privateInternal = 'must not be exposed';
         const result = await h.request('GET');
         assert.equal(result.status, 200); assert.equal(result.body.success, true);
-        assert.equal(result.body.data.revision, 0); assert.equal(result.body.data.candidateMode, 'vector');
+        assert.equal(result.body.data.revision, 0); assert.equal(result.body.data.candidateMode, 'knn');
         assert.equal(result.body.data.privateInternal, undefined); assert.equal(result.body.data._id, undefined);
         assert.equal((await h.request('PATCH', { expectedRevision: 0, sweepBatch: 10 })).status, 401);
         assert.equal(h.state.writes.length, 0);

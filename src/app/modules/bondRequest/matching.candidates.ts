@@ -14,70 +14,19 @@ export interface CandidateFetchResult {
     method: CandidateFetchMethod;
 }
 
-const CANDIDATE_PROJECT = {
-    $project: {
-        _id: 1,
-        user: 1,
-        offer: 1,
-        want: 1,
-        offerVector: 1,
-        wantVector: 1,
-        location: 1,
-        updatedAt: 1,
-        modality: 1,
-        score: { $meta: 'vectorSearchScore' },
-    },
-};
-
 const hasVector = (v: unknown): v is number[] =>
     Array.isArray(v) && v.length > 0;
 
-const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => setTimeout(resolve, ms));
-
-/** ANN query on a vector path with base + optional geo filter. Retries transient
- *  failures, so the caller falls back to $sample only on a real failure. */
 const runVectorSearch = async (
     path: 'offerVector' | 'wantVector',
     queryVector: number[],
     limit: number,
-    numCandidates: number,
+    _numCandidates: number,
     baseFilter: Record<string, unknown>,
     geoFilter: Record<string, unknown>,
-    candidateMode: MatchingSettingsSnapshot['candidateMode']
+    _candidateMode: MatchingSettingsSnapshot['candidateMode']
 ): Promise<any[]> => {
-    if (candidateMode === 'knn') {
-        return knnSearch(path, queryVector, limit, baseFilter, geoFilter);
-    }
-    const pipeline: any[] = [
-        {
-            $vectorSearch: {
-                index: MATCHING.vectorIndexName,
-                path,
-                queryVector,
-                numCandidates,
-                limit,
-                filter: baseFilter,
-            },
-        },
-    ];
-    if (geoFilter && Object.keys(geoFilter).length) {
-        pipeline.push({ $match: geoFilter });
-    }
-    pipeline.push(CANDIDATE_PROJECT);
-
-    let lastErr: unknown;
-    for (let attempt = 0; attempt <= MATCHING.vectorSearchRetries; attempt++) {
-        try {
-            return await BondRequest.aggregate(pipeline);
-        } catch (err) {
-            lastErr = err;
-            if (attempt < MATCHING.vectorSearchRetries) {
-                await sleep(MATCHING.vectorSearchRetryDelayMs * (attempt + 1));
-            }
-        }
-    }
-    throw lastErr;
+    return knnSearch(path, queryVector, limit, baseFilter, geoFilter);
 };
 
 // Wildcards carry no vector signal, so they're fetched by a direct bounded query and

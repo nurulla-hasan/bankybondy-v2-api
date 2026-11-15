@@ -121,7 +121,7 @@ export async function runMatchingRuntimeTests() {
             await candidates.fetchMatchCandidates(source(), A, U, {}, { ...snapshot, frontierEnabled: true });
             assert.equal(calls, 6);
             await candidates.fetchMatchCandidates(source(), A, U, {}, { ...snapshot, candidateMode: 'vector' });
-            assert.equal(calls, 6); assert.equal(atlas, 2);
+            assert.equal(calls, 8); assert.equal(atlas, 0);
         }],
     ];
     let pass = 0, fail = 0;

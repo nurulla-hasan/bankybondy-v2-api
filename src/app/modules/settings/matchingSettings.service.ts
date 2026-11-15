@@ -54,8 +54,8 @@ type TuningValues = Pick<MatchingSettingsValues,
 // order above the gate (otherwise chains that pass the gate score below the serving floor),
 // and the final-score weights must form a normalized blend.
 function assertTuning(values: TuningValues): void {
-    if (!(values.minScore < values.emptyMixed && values.emptyMixed < values.emptyEncounter)) {
-        throw new AppError(httpStatus.BAD_REQUEST, 'minScore < emptyMixed < emptyEncounter is required');
+    if (!(values.minScore <= values.emptyMixed && values.emptyMixed < values.emptyEncounter)) {
+        throw new AppError(httpStatus.BAD_REQUEST, 'minScore <= emptyMixed < emptyEncounter is required');
     }
     const sum = values.weightSem + values.weightRep + values.weightProx + values.weightFresh;
     if (Math.abs(sum - 1) > 0.001) {
@@ -147,7 +147,7 @@ export async function initializeMatchingSettings(): Promise<MatchingSettingsSnap
 
     // Only construct defaults when missing. Never import matching.sweep (side effects).
     const seed = matchingSettingsValuesSchema.parse({
-        candidateMode: process.env.MATCH_CANDIDATE_MODE === 'knn' ? 'knn' : 'vector',
+        candidateMode: 'knn',
         frontierEnabled: MATCHING.frontierEnabled,
         frontierSeeds: MATCHING.frontierSeeds,
         cacheTtlMinutes: MATCHING.cacheTtlMinutes,
@@ -165,8 +165,8 @@ export async function initializeMatchingSettings(): Promise<MatchingSettingsSnap
         pairBias: MATCHING.pairBias,
         maxResults: MATCHING.maxResults,
         sweepEnabled: (process.env.MATCH_SWEEP_ENABLED ?? (config.redis_url ? 'true' : 'false')).toLowerCase() === 'true',
-        sweepBatch: Math.min(Math.max(Number(process.env.MATCH_SWEEP_BATCH) || 1500, 1), 20000),
-        sweepCron: expresionCron('MATCH_SWEEP_CRON', '*/5 * * * *'),
+        sweepBatch: Math.min(Math.max(Number(process.env.MATCH_SWEEP_BATCH) || 50, 1), 20000),
+        sweepCron: expresionCron('MATCH_SWEEP_CRON', '*/30 * * * *'),
     });
     assertTuning(seed as MatchingSettingsValues);
     assertServingTtl(seed.cacheTtlMinutes);

@@ -85,7 +85,7 @@ export const MATCHING = {
     // Soft preference for shorter chains, applied at SERVING as a ranking subtraction: per
     // member beyond 2 discount `pairBias` (size 2 = 0, 3 = -pairBias, ...). Not a dictator.
     // 0 = no preference. Env-tunable without recompute (applied when reading the cache).
-    pairBias: num(process.env.MATCH_PAIR_BIAS, 0.02),
+    pairBias: num(process.env.MATCH_PAIR_BIAS, 0.02, { min: 0, max: 1 }),
 
     // Safety switch. 'false' (default) = new ranking: by score, cycle uses the same blend as
     // pairs (0.7·min + 0.3·avg), pairBias as soft preference. 'true' = old ranking (hard
@@ -127,14 +127,14 @@ export const MATCHING = {
 
     // Cache TTL: minutes a live compute stays valid before recompute (the robot keeps it
     // fresh). Answers "refresh?", NOT "may we show it?" (that is serveTtlMinutes).
-    cacheTtlMinutes: num(process.env.MATCH_CACHE_TTL_MINUTES, 60),
+    cacheTtlMinutes: num(process.env.MATCH_CACHE_TTL_MINUTES, 180),
 
     // Serve threshold: "is this cache still worth SHOWING?", separate from the refresh TTL.
     // Sharing the number once meant spinner + zero matches on 61-min caches. Its min clamps to
     // the coldest TTL (AGENDA.ttlFrioMin), not the refresh TTL; default 48 h leaves margin.
     serveTtlMinutes: num(process.env.MATCH_SERVE_TTL_MINUTES, 48 * 60, {
         min: Math.max(
-            num(process.env.MATCH_CACHE_TTL_MINUTES, 60),
+            num(process.env.MATCH_CACHE_TTL_MINUTES, 180),
             AGENDA.ttlFrioMin
         ),
         max: 30 * 24 * 60,
@@ -151,18 +151,19 @@ export const MATCHING = {
     }),
 
     // "surprise" wildcard, applied symmetrically (want OR offer). Three bands:
-    // surprise↔surprise = surpriseFloor (0.45, passes the 0.4 gate, ranks last);
-    // surprise↔concrete = floor + margin (0.55, a bonus not a multiplier); concrete↔concrete
+    // surprise↔surprise = surpriseFloor (0.4, at the gate — ranks last);
+    // surprise↔concrete = floor + margin (0.45, a bonus not a multiplier); concrete↔concrete
     // = real similarity.
-    surpriseFloor: num(process.env.MATCH_SURPRISE_FLOOR, 0.45, { min: 0, max: 1 }),
-    surpriseMargin: num(process.env.MATCH_SURPRISE_MARGIN, 0.1, { min: 0, max: 1 }),
+    surpriseFloor: num(process.env.MATCH_SURPRISE_FLOOR, 0.4, { min: 0, max: 1 }),
+    surpriseMargin: num(process.env.MATCH_SURPRISE_MARGIN, 0.05, { min: 0, max: 1 }),
 
-    // 'empty' wildcard bands: empty↔empty = emptyEncounter (0.45, just above the gate so the
-    // encounter still appears but never outranks a real specific entry);
-    // empty↔surprise = emptyMixed (0.42); empty↔concrete = 0 (excluded; the edge stays 0 and
-    // `passesGate` drops it). Invariant: minScore (0.4) < emptyMixed < emptyEncounter.
-    emptyEncounter: num(process.env.MATCH_EMPTY_ENCOUNTER, 0.45, { min: 0, max: 1 }),
-    emptyMixed: num(process.env.MATCH_EMPTY_MIXED, 0.42, { min: 0, max: 1 }),
+    // 'empty' wildcard bands: empty↔empty = emptyEncounter (0.9, HIGH — the "encounter"
+    // ranks near the top, a gift match is a strong match);
+    // empty↔surprise = emptyMixed (0.4, at the gate — barely qualifies);
+    // empty↔concrete = 0 (excluded; the edge stays 0 and `passesGate` drops it).
+    // Invariant: minScore (0.4) <= emptyMixed < emptyEncounter.
+    emptyEncounter: num(process.env.MATCH_EMPTY_ENCOUNTER, 0.9, { min: 0, max: 1 }),
+    emptyMixed: num(process.env.MATCH_EMPTY_MIXED, 0.4, { min: 0, max: 1 }),
 
     // Wildcard bonds have signal-less vectors, so vector search never returns them mid-chain.
     // They are always added via a bounded direct query; purely additive (never removes or
