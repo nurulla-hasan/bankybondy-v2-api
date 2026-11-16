@@ -47,6 +47,13 @@ const ALLOWED_MIMETYPES = new Set([
     'audio/flac',
     'audio/x-m4a',
     'audio/mp4',
+    // Phone voice notes: Android recorders emit 3gp/amr/opus and some pickers
+    // report `audio/m4a` without the `x-`. The client accepts any audio/*, so a
+    // missing entry here rejected the file only AFTER the full upload.
+    'audio/m4a',
+    'audio/3gpp',
+    'audio/amr',
+    'audio/opus',
     'application/pdf',
 ]);
 

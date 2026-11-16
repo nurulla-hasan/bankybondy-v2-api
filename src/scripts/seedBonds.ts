@@ -229,6 +229,11 @@ const BOND_SEEDS: BondSeed[] = [
 
 const SEED_OFFERS = [...new Set(BOND_SEEDS.map((bond) => bond.offer))];
 
+// Client rule: fake/demo entries may include "nothing" (empty) and "surprise"
+// wildcards, but together never above 25% of the seeded bonds.
+const MAX_WILDCARD_PCT = 25;
+const WILDCARD_TOKENS = new Set(['empty', 'surprise']);
+
 const LINK_SEEDS = [
     {
         key: 'l1',
@@ -502,6 +507,18 @@ async function resolveTargetProfile(email: string) {
 
 async function main() {
     const { targetEmail, cleanOnly } = parseArgs();
+
+    const wildcardBonds = BOND_SEEDS.filter(
+        (bond) =>
+            WILDCARD_TOKENS.has(bond.offer.trim().toLowerCase()) ||
+            WILDCARD_TOKENS.has(bond.want.trim().toLowerCase())
+    ).length;
+    const wildcardPct = (wildcardBonds / BOND_SEEDS.length) * 100;
+    if (wildcardPct > MAX_WILDCARD_PCT) {
+        throw new Error(
+            `[seed:bonds] ${wildcardBonds}/${BOND_SEEDS.length} vínculos son 'empty'/'surprise' (${wildcardPct.toFixed(1)}%); el máximo permitido es ${MAX_WILDCARD_PCT}%`
+        );
+    }
 
     const uri = process.env.BONDS_SEED_DATABASE_URL;
     const database = uri?.replace(/^mongodb(\+srv)?:\/\//, '').split('?')[0].split('@').pop()?.split('/')[1];
