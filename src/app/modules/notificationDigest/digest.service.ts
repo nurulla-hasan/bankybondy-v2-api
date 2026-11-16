@@ -117,6 +117,15 @@ const CATEGORY_META: Record<
                 ? 'Tenés 1 novedad de amistad.'
                 : `Tenés ${n} novedades de amistad.`,
     },
+    suscripcion: {
+        label: 'Suscripción',
+        color: '#8b5cf6',
+        showCount: true,
+        line: (n) =>
+            n === 1
+                ? 'Tenés 1 novedad de tu suscripción.'
+                : `Tenés ${n} novedades de tu suscripción.`,
+    },
 };
 
 // Sample sections for the PREVIEW when the user has no real activity, so the layout
