@@ -8,8 +8,12 @@ interface Snap {
     want: (Float32Array | null)[];
 }
 
-const SNAP_TTL_MS = Number(process.env.MATCH_KNN_SNAPSHOT_TTL_MS ?? 3000);
+const SNAP_TTL_MS = Number(process.env.MATCH_KNN_SNAPSHOT_TTL_MS ?? 600000); // 10 min cache in RAM
 const cache = new Map<string, { at: number; p: Promise<Snap> }>();
+
+export const clearKnnCache = (): void => {
+    cache.clear();
+};
 
 const toUnitF32 = (v: unknown): Float32Array | null => {
     if (!Array.isArray(v) || v.length === 0) return null;

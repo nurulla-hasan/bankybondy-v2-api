@@ -113,8 +113,8 @@ export const MATCHING = {
 
     // Cap on invalidation fan-out (matching.robot.ts): max sourceBonds re-enqueued at once on
     // edit/pause/delete; the rest defer to the sweep. Avoids O(N²) recompute avalanches.
-    invalidationFanout: num(process.env.MATCH_MAX_INVALIDATION_FANOUT, 200, {
-        min: 1,
+    invalidationFanout: num(process.env.MATCH_MAX_INVALIDATION_FANOUT, 10, {
+        min: 0,
         max: 2000,
     }),
 
