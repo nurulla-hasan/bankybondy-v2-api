@@ -9,10 +9,18 @@ import path from 'path';
 import { pipeline } from 'node:stream/promises';
 
 // ffmpeg path must be explicit under PM2; Windows has no /usr/bin/ffmpeg, so fall
-// back to PATH there. Override with AUDIO_FFMPEG_PATH.
-const FFMPEG_PATH =
-    process.env.AUDIO_FFMPEG_PATH ||
-    (process.platform === 'win32' ? 'ffmpeg' : '/usr/bin/ffmpeg');
+// back to PATH there. Override with AUDIO_FFMPEG_PATH (guards against Windows paths on Linux).
+const getFfmpegPath = (): string => {
+    const custom = process.env.AUDIO_FFMPEG_PATH;
+    if (custom) {
+        if (process.platform !== 'win32' && /^[a-zA-Z]:/.test(custom)) {
+            return '/usr/bin/ffmpeg';
+        }
+        return custom;
+    }
+    return process.platform === 'win32' ? 'ffmpeg' : '/usr/bin/ffmpeg';
+};
+const FFMPEG_PATH = getFfmpegPath();
 ffmpeg.setFfmpegPath(FFMPEG_PATH);
 
 // os.tmpdir(): `/tmp` becomes C:\tmp on Windows, which doesn't exist and would make
@@ -90,20 +98,35 @@ export const analyzeConversationAudio = async (audioUrl: string) => {
     let mp3Path = '';
 
     try {
-        const response: any = await axios({
-            url: audioUrl,
-            method: 'GET',
-            responseType: 'stream',
-            // Required timeout: `pipeline` rejects on error, not on silence, so a
-            // stalled source left the promise (and cleanup) hanging; axios defaults to 0.
-            timeout: Number(process.env.AUDIO_DOWNLOAD_TIMEOUT_MS) || 120_000,
-        });
+        let resolvedLocally = false;
+        try {
+            const parsed = new URL(audioUrl);
+            const relativePath = decodeURIComponent(parsed.pathname).replace(/^\/+/, '');
+            const localCandidate = path.join(process.cwd(), relativePath);
+            if (fs.existsSync(localCandidate)) {
+                fs.copyFileSync(localCandidate, originalPath);
+                resolvedLocally = true;
+            }
+        } catch {
+            resolvedLocally = false;
+        }
 
-        // Leak fix: piping into the destination and listening only to its
-        // 'finish'/'error' hung forever when S3 aborted mid-stream (the source error
-        // was swallowed), so `finally` never ran and each retry leaked an fd and a
-        // temp file. `pipeline` watches both ends and rejects.
-        await pipeline(response.data, fs.createWriteStream(originalPath));
+        if (!resolvedLocally) {
+            const response: any = await axios({
+                url: audioUrl,
+                method: 'GET',
+                responseType: 'stream',
+                // Required timeout: `pipeline` rejects on error, not on silence, so a
+                // stalled source left the promise (and cleanup) hanging; axios defaults to 0.
+                timeout: Number(process.env.AUDIO_DOWNLOAD_TIMEOUT_MS) || 120_000,
+            });
+
+            // Leak fix: piping into the destination and listening only to its
+            // 'finish'/'error' hung forever when S3 aborted mid-stream (the source error
+            // was swallowed), so `finally` never ran and each retry leaked an fd and a
+            // temp file. `pipeline` watches both ends and rejects.
+            await pipeline(response.data, fs.createWriteStream(originalPath));
+        }
 
         // Transcode on format OR size: non-mp3 and >24 MiB files previously reached
         // OpenAI and were always rejected, then retried until the sweep gave up.
@@ -166,7 +189,11 @@ Return JSON only:
             ],
         });
 
-        const result = JSON.parse(analysis.choices[0].message.content || '{}');
+        const rawContent = (analysis.choices[0].message.content || '{}')
+            .replace(/^```(?:json)?\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
+        const result = JSON.parse(rawContent);
 
         // Content verdict vs. technical failure: both dimensions must be explicit
         // booleans, else treat it as technical. A missing `prohibited_content` used
